@@ -1,0 +1,5 @@
+{
+  "name": "@erebus/api",
+  "private": true,
+  "scripts": { "dev": "tsx watch src/index.ts" }
+}

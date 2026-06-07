@@ -1,0 +1,12 @@
+# docker-compose.yml: local Postgres (pgvector) and Redis for development.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: erebus
+      POSTGRES_PASSWORD: erebus
+      POSTGRES_DB: erebus
+    ports: ["5432:5432"]
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]

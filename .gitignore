@@ -1,0 +1,17 @@
+# deps / build
+node_modules/
+dist/
+.next/
+out/
+build/
+# env / secrets
+.env
+.env.local
+*.local
+# logs / os
+*.log
+.DS_Store
+# python (workers/scripts)
+__pycache__/
+*.pyc
+.venv/
