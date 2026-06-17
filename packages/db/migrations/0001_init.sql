@@ -1,1 +1,0 @@
--- 0001_init.sql: Initial schema migration.

@@ -1,82 +1,68 @@
-# EREBUS
+# EREBUS v2
 
-**A recursive intelligence platform that generates, adversarially challenges, and continuously refines theories about world events.**
-
-> **Status:** This repository documents EREBUS's architecture and module layout. The core services are being ported in from an earlier prototype; the design, data model, and module boundaries below are stable. See the [Roadmap](#roadmap).
+**A recursive intelligence platform that generates, adversarially challenges, and continuously refines theories about world events — with live data ingestion, evidence confirmation tracking, and autonomous agents.**
 
 ---
 
-## Overview
+## What it does
 
-EREBUS ingests real-world events and builds a recursive **Theory Tree** of competing explanations. Every theory is stress-tested by a **Shadow Board**: a panel of seven deception-analysis lenses drawn from structured intelligence-analysis tradecraft. Background workers continuously re-embed new information, surface related theories by vector similarity, and re-score the tree so its conclusions stay current.
+EREBUS ingests real-world events, builds a recursive **Theory Tree** of competing explanations, stress-tests each theory with a seven-lens **Shadow Board**, and then **tracks whether each branch actually comes true** against incoming news. Background workers keep the whole picture current without you touching it.
 
-The goal is not to produce one confident answer, but to hold many explanations at once, attack each of them honestly, and track how well each survives scrutiny over time.
+### The four pillars
+- **Live ingestion** — RSS/news pollers fetch events, embed them into `pgvector`, dedup, and feed the tree.
+- **Theory Tree** — recursive hypotheses (Opus-powered expansion) under explicit depth/branch budgets. Indigo = you, amber = EREBUS.
+- **Shadow Board** — seven independent red-team lenses (source reliability, confirmation bias, denial & deception, ACH, incentives, logical coherence, base rates) score each theory.
+- **Evidence tracking** — every branch is auto-checked against ingested events and marked `confirmed` / `partial` / `disconfirmed` / `pending`, with a live colour-coded tree.
+- **Autonomous agents** — a scheduler runs ingestion, tree expansion, evidence sweeps, and re-scoring on intervals, within a daily LLM budget.
 
-## Core ideas
-
-- **Theory Tree.** Each node is a hypothesis that can branch into sub-hypotheses. Expansion runs under explicit depth and branch budgets so the search stays bounded and legible.
-- **Shadow Board (seven lenses).** Each lens independently red-teams a theory for one specific failure mode and returns a structured verdict (verdict, severity, rationale). The seven lenses are source reliability, confirmation bias, denial and deception, analysis of competing hypotheses, incentive analysis, logical coherence, and base rates. See [`docs/shadow-board.md`](docs/shadow-board.md).
-- **Continuous refinement.** Workers embed events and theories into `pgvector`, link related theories by similarity, and re-run scoring as new evidence arrives.
-
-## Tech stack
+## Stack
 
 | Layer | Choice |
 |------|--------|
-| Frontend | Next.js (App Router), React, Tailwind |
-| API | Hono (TypeScript) |
-| Data | PostgreSQL 16 + pgvector |
-| LLM | Anthropic Claude API |
-| Workers | Node background workers + scheduler |
 | Monorepo | pnpm workspaces + Turborepo |
+| API | Hono (TypeScript), WebSocket live updates |
+| Web | Next.js 15 (App Router), React 19, Tailwind v4 |
+| Data | PostgreSQL 16 + pgvector |
+| LLM | Anthropic Claude (model-swappable: deep/fast), cost-tracked, offline fallback |
+| Embeddings | Voyage / OpenAI / deterministic offline fallback |
+| Auth | Basic-auth gate (dashboard + API) |
 
-## Repository layout
+## Layout
 
 ```
 erebus/
 ├── apps/
-│   ├── web/                     Next.js dashboard (Theory Tree + Shadow Board UI)
-│   │   ├── app/                 routes: dashboard, theory detail
-│   │   ├── components/          TheoryTree, ShadowBoard, EventFeed
-│   │   └── lib/                 typed API client
-│   └── api/                     Hono API
-│       └── src/
-│           ├── routes/          theories, events, shadowboard
-│           ├── engine/          theory tree, recursion control, scoring
-│           ├── shadowboard/     board + the seven lenses
-│           └── llm/             Claude client + prompt templates
+│   ├── api/   Hono API — engine/ (theory tree, scoring), shadowboard/, evidence/, ingestion/, routes/, workers/, llm/
+│   └── web/   Next.js dashboard — Theory Tree viz, Shadow Board, Evidence panel, Event feed, Sources, Settings
 ├── packages/
-│   ├── db/                      schema, client, pgvector helpers, migrations
-│   └── core/                    shared domain types
-├── workers/                     theory refiner, embedding indexer, scheduler
-└── docs/                        architecture and Shadow Board notes
+│   ├── core/  shared types + constants (the seven lenses, colours, budgets)
+│   └── db/    Postgres schema, client, pgvector + embeddings helpers
+└── docker-compose.yml / docker-compose.prod.yml
 ```
 
-## How it works
-
-1. Events are ingested and embedded into `pgvector`.
-2. The Theory Tree engine expands one or more root hypotheses, branching under depth and branch budgets.
-3. Each node is sent to the Shadow Board; the seven lenses red-team it in parallel and return verdicts.
-4. Scoring combines lens verdicts, supporting evidence, and novelty into a confidence score.
-5. Workers re-embed new events, link related theories, and re-score, keeping the tree current.
-
-## Quickstart
+## Run locally
 
 ```bash
-cp .env.example .env          # add your ANTHROPIC_API_KEY
-docker compose up -d          # Postgres (pgvector) + Redis
+cp .env.example .env            # add ANTHROPIC_API_KEY (optional — runs offline without it)
+docker compose up -d            # Postgres (pgvector) + Redis
 pnpm install
-pnpm dev                      # web + api
-pnpm workers                  # background refinement
+pnpm --filter @erebus/db push   # apply schema
+pnpm --filter @erebus/db seed   # seed default news sources
+pnpm dev                        # api :8787 + web :3000
 ```
 
-## Roadmap
+Open http://localhost:3000.
 
-- [ ] Port the Theory Tree engine (expansion, branching, pruning)
-- [ ] Port the seven Shadow Board lenses
-- [ ] Wire continuous-refinement workers
-- [ ] Theory Tree visualization in the web app
-- [ ] Evaluation: track calibration of confidence scores against outcomes
+## Deploy (VPS)
 
-## License
+```bash
+# on the server, in the repo:
+cp .env.example .env            # set EREBUS_PASS, ANTHROPIC_API_KEY, POSTGRES_PASSWORD
+bash scripts/deploy.sh          # builds + starts the prod stack on :4000 (web) / :4001 (api)
+```
 
-[MIT](LICENSE)
+The production stack uses ports 4000/4001/5433/6380 to stay isolated from anything else on the box.
+
+## Offline mode
+
+With no `ANTHROPIC_API_KEY`, EREBUS still runs: ingestion, the tree, the dashboard, and evidence scaffolding all work; LLM-generated content is flagged `[offline]` until a key is added. Add credits and the same buttons produce real analysis.

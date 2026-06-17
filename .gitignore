@@ -1,17 +1,32 @@
-# deps / build
+# dependencies
 node_modules/
+.pnpm-store/
+
+# builds
 dist/
 .next/
 out/
-build/
+*.tsbuildinfo
+
 # env / secrets
 .env
 .env.local
-*.local
-# logs / os
+.env.*.local
+!.env.example
+
+# logs
 *.log
+npm-debug.log*
+logs/
+
+# turbo
+.turbo/
+
+# os
 .DS_Store
-# python (workers/scripts)
-__pycache__/
-*.pyc
-.venv/
+Thumbs.db
+desktop.ini
+
+# editor
+.vscode/
+.idea/

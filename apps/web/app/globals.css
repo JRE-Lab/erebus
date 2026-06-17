@@ -1,0 +1,103 @@
+@import "tailwindcss";
+
+/* ============================================================
+   EREBUS design system — dark intelligence briefing room.
+   Use these CSS variables everywhere for a coherent look.
+   ============================================================ */
+:root {
+  --nx-bg-primary: #0a0a0f;
+  --nx-bg-secondary: #101018;
+  --nx-bg-card: #15151f;
+  --nx-bg-elevated: #1b1b27;
+  --nx-border: #262633;
+  --nx-border-bright: #34344a;
+
+  --nx-text-primary: #e8e8f0;
+  --nx-text-secondary: #a8a8bc;
+  --nx-text-muted: #6b6b82;
+
+  --nx-accent-indigo: #6366f1;
+  --nx-accent-amber: #f59e0b;
+  --nx-accent-green: #22c55e;
+  --nx-accent-red: #ef4444;
+  --nx-accent-cyan: #06b6d4;
+  --nx-accent-purple: #a855f7;
+
+  --nx-confirmed: #22c55e;
+  --nx-partial: #eab308;
+  --nx-disconfirmed: #ef4444;
+  --nx-pending: #94a3b8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--nx-bg-primary);
+  color: var(--nx-text-primary);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.nx-mono {
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+}
+
+/* Card */
+.nx-card {
+  background: var(--nx-bg-card);
+  border: 1px solid var(--nx-border);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+/* Badge */
+.nx-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+/* Status dot */
+.nx-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+/* Pulse animation */
+@keyframes nx-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.nx-pulse {
+  animation: nx-pulse 2s ease-in-out infinite;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: var(--nx-bg-primary); }
+::-webkit-scrollbar-thumb { background: var(--nx-border-bright); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--nx-text-muted); }
+
+/* Keyboard hint */
+.nx-kbd {
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--nx-bg-elevated);
+  border: 1px solid var(--nx-border);
+  color: var(--nx-text-muted);
+}
