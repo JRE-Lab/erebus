@@ -1,40 +1,44 @@
-"use client";
-// Tiny WebSocket helper for live dashboard updates. Auto-reconnects.
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8787/ws";
+// ============================================================================
+// Live-update stub. No real WebSocket — polls /api/changed every 15s and fires
+// the handler when anything moved (new nodes, greened branches, new signals).
+// Keep simple: this is the seam where a real socket can drop in later.
+// ============================================================================
+import { fetchChanged, type ChangedResponse } from "./api.js";
 
-type Handler = (type: string, payload: unknown) => void;
+export type ErebusEventHandler = (change: ChangedResponse) => void;
 
-let ws: WebSocket | null = null;
-let delay = 1000;
-const handlers = new Set<Handler>();
-
-function connect() {
-  if (typeof window === "undefined") return;
-  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-  try {
-    ws = new WebSocket(WS_URL);
-    ws.onopen = () => {
-      delay = 1000;
-    };
-    ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data) as { type: string; payload: unknown };
-        handlers.forEach((h) => h(msg.type, msg.payload));
-      } catch {
-        /* ignore */
-      }
-    };
-    ws.onclose = () => {
-      setTimeout(connect, (delay = Math.min(delay * 2, 30000)));
-    };
-    ws.onerror = () => ws?.close();
-  } catch {
-    setTimeout(connect, 5000);
-  }
+export interface OnErebusEventOptions {
+  intervalMs?: number; // default 15s
+  immediate?: boolean; // fire one poll right away (default false)
 }
 
-export function onErebusEvent(handler: Handler): () => void {
-  handlers.add(handler);
-  connect();
-  return () => handlers.delete(handler);
+// Subscribe to change polls. Returns an unsubscribe function that stops the loop.
+export function onErebusEvent(
+  handler: ErebusEventHandler,
+  opts: OnErebusEventOptions = {}
+): () => void {
+  const intervalMs = opts.intervalMs ?? 15_000;
+  let last = new Date().toISOString();
+  let stopped = false;
+
+  async function tick(): Promise<void> {
+    if (stopped) return;
+    try {
+      const change = await fetchChanged(last);
+      last = change.since ? new Date().toISOString() : last;
+      if (change.newNodes > 0 || change.greened > 0 || change.newSignals > 0) {
+        handler(change);
+      }
+    } catch {
+      // Network blips are non-fatal; the next tick retries.
+    }
+  }
+
+  if (opts.immediate) void tick();
+  const id = setInterval(() => void tick(), intervalMs);
+
+  return () => {
+    stopped = true;
+    clearInterval(id);
+  };
 }

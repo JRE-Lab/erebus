@@ -9,14 +9,10 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "verbatimModuleSyntax": false,
     "strict": true,
     "noUncheckedIndexedAccess": true,
-    "noImplicitOverride": true,
     "skipLibCheck": true,
     "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
-    "composite": false
+    "sourceMap": true
   }
 }

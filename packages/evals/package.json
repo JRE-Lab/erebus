@@ -1,0 +1,24 @@
+{
+  "name": "@erebus/evals",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": { ".": "./src/index.ts", "./golden": "./src/golden.ts" },
+  "scripts": {
+    "run": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "echo 'evals: source-only'",
+    "clean": "rm -rf dist .turbo"
+  },
+  "dependencies": {
+    "@erebus/core": "workspace:*",
+    "@erebus/db": "workspace:*",
+    "drizzle-orm": "^0.38.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,105 +1,209 @@
-// Typed API client. Sends baked Basic Auth (cross-origin: web :4000 -> api :4001).
-import type {
-  Theory,
-  TheoryNode,
-  EventRecord,
-  FeedItem,
-  Source,
-  ShadowBoardResult,
-  LensVerdict,
-  EvidenceStatus,
-} from "@erebus/core";
+// ============================================================================
+// Typed fetch client for the EREBUS API. Same-origin (base "/api"), so no auth
+// header is needed — Basic-auth (if enabled) rides on the browser session.
+// Each function maps 1:1 to a route in app/api/[[...route]]/route.ts.
+// ============================================================================
+import type { NodeRow, SignalRow } from "@erebus/core";
 
-const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8787";
-const USER = process.env.NEXT_PUBLIC_EREBUS_USER || "";
-const PASS = process.env.NEXT_PUBLIC_EREBUS_PASS || "";
+const BASE = "/api";
 
-function authHeader(): Record<string, string> {
-  if (!PASS) return {};
-  const token =
-    typeof window === "undefined"
-      ? Buffer.from(`${USER}:${PASS}`).toString("base64")
-      : btoa(`${USER}:${PASS}`);
-  return { Authorization: `Basic ${token}` };
+// --- shared response shapes (mirror the locked contracts' return types) -----
+
+export interface HealthResponse {
+  status: string;
+  llm: "live" | "offline";
 }
+
+export interface CreateForecastResponse {
+  node: NodeRow;
+  cost: number;
+  offline: boolean;
+}
+
+export interface ExpandResponse {
+  children: NodeRow[];
+  cost: number;
+  blocked?: string;
+}
+
+export interface SynthesizeResponse {
+  node: NodeRow | null;
+  cost: number;
+}
+
+export interface DebateResponse {
+  rounds: number;
+  verdict: string;
+  confidenceBefore: number;
+  confidenceAfter: number;
+  revisedOutcome?: string;
+  cost: number;
+}
+
+export interface ShadowResponse {
+  shadowRead: unknown | null;
+  spawnedNode: string | null;
+  cost: number;
+  offline: boolean;
+}
+
+export interface IngestResponse {
+  signals: number;
+  matches: number;
+}
+
+export interface SignalMatchWithSignal {
+  id: string;
+  signalId: string | null;
+  nodeId: string | null;
+  effect: string;
+  weight: number;
+  rationale: string | null;
+  createdAt: string;
+  signal: {
+    id: string;
+    source: string | null;
+    url: string | null;
+    title: string | null;
+    summary: string | null;
+    publishedAt: string | null;
+  } | null;
+}
+
+export interface RelationshipRow {
+  id: string;
+  fromNode: string | null;
+  toNode: string | null;
+  type: string;
+  strength: number;
+  rationale: string;
+  createdAt: string;
+}
+
+export interface NodeDetail {
+  node: NodeRow;
+  signal_matches: SignalMatchWithSignal[];
+  debates: unknown[];
+  shadow_reads: unknown[];
+  events: unknown[];
+  relationships: { from: RelationshipRow[]; to: RelationshipRow[] };
+}
+
+export interface SearchResponse {
+  query: string;
+  nodes: { distance: number; node: NodeRow }[];
+  signals: { distance: number; signal: SignalRow }[];
+}
+
+export interface WorldviewSnapshot {
+  id: string;
+  summary: string | null;
+  nodeCount: number | null;
+  greenCount: number | null;
+  calibrationScore: number | null;
+  novelLinks: unknown;
+  generatedAt: string;
+}
+
+export interface CostResponse {
+  today: number;
+  month: number;
+  allTime: number;
+  jobs: number;
+}
+
+export interface ContentItem {
+  id: string;
+  nodeId: string | null;
+  script: string | null;
+  audioUrl: string | null;
+  videoUrl: string | null;
+  platform: string | null;
+  status: string;
+  publishedAt: string | null;
+  createdAt: string;
+}
+
+export interface ChangedResponse {
+  since: string;
+  newNodes: number;
+  greened: number;
+  newSignals: number;
+}
+
+// --- transport --------------------------------------------------------------
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...authHeader(), ...(init?.headers || {}) },
+    headers: {
+      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...(init?.headers || {}),
+    },
     cache: "no-store",
   });
-  if (!res.ok) throw new Error(`API ${res.status} ${path}`);
-  return res.json() as Promise<T>;
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const body = (await res.json()) as { error?: string };
+      detail = body?.error ? `: ${body.error}` : "";
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(`${init?.method || "GET"} ${path} -> ${res.status}${detail}`);
+  }
+  // 204 / empty bodies degrade to null.
+  const text = await res.text();
+  return (text ? JSON.parse(text) : null) as T;
 }
 
-const get = <T>(p: string) => req<T>(p);
-const post = <T>(p: string, body?: unknown) =>
-  req<T>(p, { method: "POST", body: body ? JSON.stringify(body) : undefined });
-const patch = <T>(p: string, body?: unknown) =>
-  req<T>(p, { method: "PATCH", body: body ? JSON.stringify(body) : undefined });
+function post<T>(path: string, body?: unknown): Promise<T> {
+  return req<T>(path, {
+    method: "POST",
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
 
-// --- Health ---
-export const fetchHealth = () => get<{ status: string; db: boolean; llm: string }>("/health");
+// --- public surface (matches the spec list exactly) -------------------------
 
-// --- Theories ---
-export const fetchTheories = (status?: string) =>
-  get<{ data: Theory[]; total: number }>(`/theories${status ? `?status=${status}` : ""}`);
-export const fetchTheory = (id: string) =>
-  get<{ data: Theory & { connections: unknown[]; predictions: unknown[]; confidenceHistory: unknown[] } }>(
-    `/theories/${id}`
-  );
-export const fetchTheoryGraph = () =>
-  get<{ nodes: unknown[]; edges: unknown[] }>("/theories/graph");
-export const fetchTree = (id: string) => get<{ data: TheoryNode[] }>(`/theories/${id}/tree`);
-export const createTheory = (body: { title?: string; context: string; isShadow?: boolean }) =>
-  post<{ data: Theory }>("/theories", body);
-export const expandNode = (nodeId: string, question?: string) =>
-  post<{ data: TheoryNode }>(`/theories/node/${nodeId}/expand`, { question });
-export const rescoreTheory = (id: string) => post<{ data: unknown }>(`/theories/${id}/rescore`);
-export const deleteTheory = (id: string) => req(`/theories/${id}`, { method: "DELETE" });
+export const fetchHealth = () => req<HealthResponse>("/health");
 
-// --- Events ---
-export const fetchEvents = (limit = 50) => get<{ data: EventRecord[] }>(`/events?limit=${limit}`);
-export const createEvent = (body: { title: string; body?: string; url?: string }) =>
-  post<{ data: EventRecord }>("/events", body);
+export const fetchNodes = () => req<NodeRow[]>("/nodes");
 
-// --- Shadow Board ---
-export const fetchLenses = () => get<{ data: Record<string, { title: string; short: string }> }>("/shadowboard/lenses");
-export const fetchVerdicts = (theoryId: string) =>
-  get<{ data: LensVerdict[] }>(`/shadowboard/${theoryId}`);
-export const runShadowBoard = (theoryId: string) =>
-  post<{ data: ShadowBoardResult }>(`/shadowboard/${theoryId}/run`);
+export const fetchNode = (id: string) => req<NodeDetail>(`/nodes/${encodeURIComponent(id)}`);
 
-// --- Evidence ---
-export const checkNodeEvidence = (nodeId: string) =>
-  post<{ data: { nodeId: string; status: EvidenceStatus; evidence: Record<string, unknown>; cost: number } }>(
-    `/evidence/node/${nodeId}/check`
-  );
-export const checkAllEvidence = (theoryId: string) =>
-  post<{ data: { checked: number; totalCost: number; results: { nodeId: string; status: EvidenceStatus }[] } }>(
-    `/evidence/${theoryId}/check-all`
-  );
-export const markEvidence = (nodeId: string, status: EvidenceStatus, summary?: string) =>
-  post<{ data: unknown }>(`/evidence/node/${nodeId}/mark`, { status, summary });
+export const fetchTree = (root?: string) =>
+  req<NodeRow[]>(`/tree${root ? `?root=${encodeURIComponent(root)}` : ""}`);
 
-// --- Ingestion ---
-export const fetchSources = () => get<{ data: Source[] }>("/ingestion/sources");
-export const addSource = (body: { name: string; url: string; tier?: number }) =>
-  post<{ data: Source }>("/ingestion/sources", body);
-export const toggleSource = (id: number, enabled: boolean) =>
-  patch<{ data: Source }>(`/ingestion/sources/${id}`, { enabled });
-export const pollNow = () => post<{ data: { sources: number; inserted: number } }>("/ingestion/poll");
+export const createForecast = (context: string) =>
+  post<CreateForecastResponse>("/nodes", { context });
 
-// --- Feed ---
-export const fetchFeed = (limit = 100) => get<{ data: FeedItem[] }>(`/feed?limit=${limit}`);
+export const expandNode = (id: string) =>
+  post<ExpandResponse>(`/nodes/${encodeURIComponent(id)}/expand`);
 
-// --- Search ---
-export const search = (q: string) =>
-  get<{ data: { events: unknown[]; theories: unknown[] } }>(`/search?q=${encodeURIComponent(q)}`);
+export const debateNode = (id: string, rounds?: number) =>
+  post<DebateResponse>(`/nodes/${encodeURIComponent(id)}/debate`, { rounds: rounds ?? 1 });
 
-// --- Settings / cost ---
-export const fetchCost = () =>
-  get<{ data: { today: number; month: number; budget: number; byAgent: unknown[] } }>("/settings/cost");
+export const shadowNode = (id: string) =>
+  post<ShadowResponse>(`/nodes/${encodeURIComponent(id)}/shadow`);
 
-export { BASE as API_BASE };
+export const synthesize = (ids: string[]) => post<SynthesizeResponse>("/synthesize", { ids });
+
+export const fetchSignals = (limit?: number) =>
+  req<SignalRow[]>(`/signals${limit ? `?limit=${limit}` : ""}`);
+
+export const triggerIngest = () => post<IngestResponse>("/ingest");
+
+export const search = (q: string) => req<SearchResponse>(`/search?q=${encodeURIComponent(q)}`);
+
+export const fetchWorldview = () => req<WorldviewSnapshot | null>("/worldview");
+
+export const fetchCost = () => req<CostResponse>("/cost");
+
+export const fetchContent = () => req<ContentItem[]>("/content");
+
+export const makeContent = (id: string) =>
+  post<ContentItem>(`/content/${encodeURIComponent(id)}`);
+
+export const fetchChanged = (since?: string) =>
+  req<ChangedResponse>(`/changed${since ? `?since=${encodeURIComponent(since)}` : ""}`);

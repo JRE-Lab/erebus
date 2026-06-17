@@ -3,23 +3,26 @@
   "version": "2.0.0",
   "private": true,
   "packageManager": "pnpm@9.12.0",
-  "engines": {
-    "node": ">=20"
-  },
+  "engines": { "node": ">=20" },
   "scripts": {
     "dev": "turbo run dev --parallel",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
-    "lint": "turbo run lint",
-    "db:push": "pnpm --filter @erebus/db push",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "pnpm --filter @erebus/db migrate",
     "db:seed": "pnpm --filter @erebus/db seed",
-    "workers": "pnpm --filter @erebus/workers start",
+    "worker": "pnpm --filter @erebus/worker start",
+    "ingest": "pnpm --filter @erebus/worker ingest",
+    "eval": "pnpm --filter @erebus/evals run",
+    "garden": "pnpm --filter @erebus/worker garden",
     "clean": "turbo run clean && rm -rf node_modules"
   },
   "devDependencies": {
     "turbo": "^2.3.0",
     "typescript": "^5.7.2",
     "tsx": "^4.19.2",
-    "@types/node": "^22.10.0"
+    "@types/node": "^22.10.0",
+    "drizzle-kit": "^0.30.1",
+    "drizzle-orm": "^0.38.3"
   }
 }

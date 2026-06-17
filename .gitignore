@@ -1,32 +1,21 @@
-# dependencies
 node_modules/
 .pnpm-store/
-
-# builds
 dist/
 .next/
 out/
 *.tsbuildinfo
-
-# env / secrets
 .env
 .env.local
 .env.*.local
 !.env.example
-
-# logs
 *.log
-npm-debug.log*
 logs/
-
-# turbo
 .turbo/
-
-# os
 .DS_Store
 Thumbs.db
 desktop.ini
-
-# editor
 .vscode/
 .idea/
+# Remotion / content render artifacts
+apps/web/out/
+packages/content/out/

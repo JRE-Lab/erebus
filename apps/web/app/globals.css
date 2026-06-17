@@ -1,32 +1,46 @@
 @import "tailwindcss";
 
-/* ============================================================
-   EREBUS design system — dark intelligence briefing room.
-   Use these CSS variables everywhere for a coherent look.
-   ============================================================ */
+/* ============================================================================
+   EREBUS v2 — design tokens. Dark intelligence-room aesthetic.
+   The tree greens as reality confirms it; the chrome stays out of the way.
+   ============================================================================ */
+
 :root {
+  /* surfaces */
   --nx-bg-primary: #0a0a0f;
-  --nx-bg-secondary: #101018;
   --nx-bg-card: #15151f;
-  --nx-bg-elevated: #1b1b27;
+  --nx-bg-elevated: #1c1c2a;
   --nx-border: #262633;
-  --nx-border-bright: #34344a;
+  --nx-border-strong: #34344a;
 
+  /* text */
   --nx-text-primary: #e8e8f0;
-  --nx-text-secondary: #a8a8bc;
-  --nx-text-muted: #6b6b82;
+  --nx-text-secondary: #a0a0b8;
+  --nx-text-muted: #6b6b85;
 
-  --nx-accent-indigo: #6366f1;
-  --nx-accent-amber: #f59e0b;
-  --nx-accent-green: #22c55e;
-  --nx-accent-red: #ef4444;
-  --nx-accent-cyan: #06b6d4;
-  --nx-accent-purple: #a855f7;
+  /* accents */
+  --nx-indigo: #6366f1;
+  --nx-amber: #f59e0b;
+  --nx-green: #22c55e;
+  --nx-red: #ef4444;
 
-  --nx-confirmed: #22c55e;
-  --nx-partial: #eab308;
-  --nx-disconfirmed: #ef4444;
-  --nx-pending: #94a3b8;
+  /* state glows */
+  --nx-green-glow: rgba(34, 197, 94, 0.45);
+  --nx-indigo-glow: rgba(99, 102, 241, 0.35);
+}
+
+@theme inline {
+  --color-nx-bg-primary: var(--nx-bg-primary);
+  --color-nx-bg-card: var(--nx-bg-card);
+  --color-nx-bg-elevated: var(--nx-bg-elevated);
+  --color-nx-border: var(--nx-border);
+  --color-nx-text-primary: var(--nx-text-primary);
+  --color-nx-text-secondary: var(--nx-text-secondary);
+  --color-nx-text-muted: var(--nx-text-muted);
+  --color-nx-indigo: var(--nx-indigo);
+  --color-nx-amber: var(--nx-amber);
+  --color-nx-green: var(--nx-green);
+  --color-nx-red: var(--nx-red);
 }
 
 * {
@@ -37,67 +51,231 @@ html,
 body {
   margin: 0;
   padding: 0;
+  height: 100%;
   background: var(--nx-bg-primary);
   color: var(--nx-text-primary);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   -webkit-font-smoothing: antialiased;
 }
 
-.nx-mono {
-  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+body {
+  background-image:
+    radial-gradient(1200px 600px at 12% -10%, rgba(99, 102, 241, 0.08), transparent 60%),
+    radial-gradient(900px 500px at 95% 0%, rgba(34, 197, 94, 0.05), transparent 55%);
+  background-attachment: fixed;
 }
 
-/* Card */
+::selection {
+  background: var(--nx-indigo-glow);
+}
+
+/* --- scrollbars (intelligence-room thin) --- */
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--nx-border-strong);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #43435c;
+}
+
+/* ============================================================================
+   Helpers
+   ============================================================================ */
+
 .nx-card {
   background: var(--nx-bg-card);
   border: 1px solid var(--nx-border);
-  border-radius: 10px;
-  padding: 16px;
+  border-radius: 14px;
 }
 
-/* Badge */
+.nx-card-elevated {
+  background: var(--nx-bg-elevated);
+  border: 1px solid var(--nx-border);
+  border-radius: 14px;
+}
+
 .nx-badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 2px 8px;
+  gap: 0.375rem;
+  padding: 0.15rem 0.55rem;
   border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.4;
+  border: 1px solid var(--nx-border-strong);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--nx-text-secondary);
+  white-space: nowrap;
 }
 
-/* Status dot */
+.nx-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 8px;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  border: 1px solid transparent;
+}
+
+.nx-chip-green {
+  background: rgba(34, 197, 94, 0.08);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: #86efac;
+}
+
+.nx-chip-red {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+}
+
+.nx-chip-indigo {
+  background: rgba(99, 102, 241, 0.08);
+  border-color: rgba(99, 102, 241, 0.3);
+  color: #c7d2fe;
+}
+
+.nx-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.85rem;
+  border-radius: 10px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border: 1px solid var(--nx-border-strong);
+  background: var(--nx-bg-elevated);
+  color: var(--nx-text-primary);
+  cursor: pointer;
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease,
+    transform 0.08s ease,
+    opacity 0.14s ease;
+}
+.nx-btn:hover {
+  background: #23233440;
+  border-color: var(--nx-indigo);
+}
+.nx-btn:active {
+  transform: translateY(1px);
+}
+.nx-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.nx-btn-primary {
+  background: var(--nx-indigo);
+  border-color: var(--nx-indigo);
+  color: #fff;
+}
+.nx-btn-primary:hover {
+  background: #4f52e0;
+  border-color: #4f52e0;
+}
+
+.nx-input {
+  width: 100%;
+  background: var(--nx-bg-primary);
+  border: 1px solid var(--nx-border);
+  border-radius: 10px;
+  color: var(--nx-text-primary);
+  padding: 0.6rem 0.75rem;
+  font-size: 0.85rem;
+  outline: none;
+  transition: border-color 0.14s ease;
+}
+.nx-input:focus {
+  border-color: var(--nx-indigo);
+}
+.nx-input::placeholder {
+  color: var(--nx-text-muted);
+}
+
+.nx-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--nx-text-muted);
+}
+
+/* live status dot */
 .nx-dot {
   width: 8px;
   height: 8px;
-  border-radius: 50%;
+  border-radius: 999px;
   display: inline-block;
 }
-
-/* Pulse animation */
-@keyframes nx-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-.nx-pulse {
+.nx-dot-live {
+  background: var(--nx-green);
+  box-shadow: 0 0 8px var(--nx-green-glow);
   animation: nx-pulse 2s ease-in-out infinite;
 }
+.nx-dot-down {
+  background: var(--nx-red);
+}
+.nx-dot-idle {
+  background: var(--nx-text-muted);
+}
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 9px; height: 9px; }
-::-webkit-scrollbar-track { background: var(--nx-bg-primary); }
-::-webkit-scrollbar-thumb { background: var(--nx-border-bright); border-radius: 999px; }
-::-webkit-scrollbar-thumb:hover { background: var(--nx-text-muted); }
+@keyframes nx-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
 
-/* Keyboard hint */
-.nx-kbd {
-  font-family: ui-monospace, monospace;
-  font-size: 10px;
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: var(--nx-bg-elevated);
-  border: 1px solid var(--nx-border);
-  color: var(--nx-text-muted);
+/* the green glow — the whole point */
+@keyframes nx-green-breathe {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 6px var(--nx-green-glow));
+  }
+  50% {
+    filter: drop-shadow(0 0 14px var(--nx-green-glow));
+  }
+}
+.nx-green-glow {
+  animation: nx-green-breathe 2.6s ease-in-out infinite;
+}
+
+.nx-fade-in {
+  animation: nx-fade 0.25s ease;
+}
+@keyframes nx-fade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.nx-scroll {
+  overflow: auto;
+}
+
+.nx-mono {
+  font-family: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
 }

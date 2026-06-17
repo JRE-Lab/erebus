@@ -1,5 +1,6 @@
-# Production stack for the VPS. Ports chosen to avoid the BTC dashboard
-# (which uses 3000/5050). EREBUS uses 4000/4001/5433/6380.
+# Production stack for the VPS. The Hono API is mounted inside Next, so the web
+# container serves both UI and /api on one port. Ports avoid the BTC dashboard
+# (3000/5050): EREBUS uses 4000 (web+api), 5433 (pg), 6380 (redis).
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -13,7 +14,6 @@ services:
       - "5433:5432"
     volumes:
       - erebus_pgdata:/var/lib/postgresql/data
-      - ./packages/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U erebus"]
       interval: 10s
@@ -36,54 +36,57 @@ services:
       retries: 5
     networks: [erebus]
 
-  api:
-    build:
-      context: .
-      dockerfile: apps/api/Dockerfile
-    container_name: erebus-api
-    restart: unless-stopped
-    ports:
-      - "4001:8787"
-    environment:
-      API_PORT: "8787"
-      DATABASE_URL: postgresql://erebus:${POSTGRES_PASSWORD:-erebus_prod}@postgres:5432/erebus
-      REDIS_URL: redis://redis:6379
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ANTHROPIC_MODEL_DEEP: ${ANTHROPIC_MODEL_DEEP:-claude-opus-4-8}
-      ANTHROPIC_MODEL_FAST: ${ANTHROPIC_MODEL_FAST:-claude-sonnet-4-6}
-      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-offline}
-      EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
-      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      EREBUS_USER: ${EREBUS_USER:-erebus}
-      EREBUS_PASS: ${EREBUS_PASS}
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://159.203.86.148:4000}
-      WORKERS_ENABLED: ${WORKERS_ENABLED:-true}
-      DAILY_LLM_BUDGET_USD: ${DAILY_LLM_BUDGET_USD:-10}
-      NODE_ENV: production
-    depends_on:
-      postgres: { condition: service_healthy }
-      redis: { condition: service_healthy }
-    networks: [erebus]
-
   web:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
-      args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://159.203.86.148:4001}
-        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://159.203.86.148:4001/ws}
-        NEXT_PUBLIC_EREBUS_USER: ${EREBUS_USER:-erebus}
-        NEXT_PUBLIC_EREBUS_PASS: ${EREBUS_PASS}
     container_name: erebus-web
     restart: unless-stopped
     ports:
       - "4000:3000"
     environment:
       NODE_ENV: production
+      DATABASE_URL: postgresql://erebus:${POSTGRES_PASSWORD:-erebus_prod}@postgres:5432/erebus
+      REDIS_URL: redis://redis:6379
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPUS_MODEL: ${OPUS_MODEL:-claude-opus-4-8}
+      SONNET_MODEL: ${SONNET_MODEL:-claude-sonnet-4-6}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-offline}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1536}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       EREBUS_USER: ${EREBUS_USER:-erebus}
       EREBUS_PASS: ${EREBUS_PASS}
-    depends_on: [api]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [erebus]
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    container_name: erebus-worker
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://erebus:${POSTGRES_PASSWORD:-erebus_prod}@postgres:5432/erebus
+      REDIS_URL: redis://redis:6379
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPUS_MODEL: ${OPUS_MODEL:-claude-opus-4-8}
+      SONNET_MODEL: ${SONNET_MODEL:-claude-sonnet-4-6}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-offline}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1536}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      NEWS_SOURCES: ${NEWS_SOURCES:-}
+      CYCLE_BUDGET_USD: ${CYCLE_BUDGET_USD:-2.00}
+      DAILY_BUDGET_USD: ${DAILY_BUDGET_USD:-15}
+      MAX_DEPTH: ${MAX_DEPTH:-8}
+      INGEST_EVERY_MIN: ${INGEST_EVERY_MIN:-30}
+      CYCLE_EVERY_MIN: ${CYCLE_EVERY_MIN:-60}
+      GARDEN_EVERY_MIN: ${GARDEN_EVERY_MIN:-720}
+      WORLDVIEW_EVERY_MIN: ${WORLDVIEW_EVERY_MIN:-1440}
+    depends_on:
+      postgres: { condition: service_healthy }
     networks: [erebus]
 
 volumes:

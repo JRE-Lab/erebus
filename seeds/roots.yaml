@@ -1,0 +1,64 @@
+# Root forecasts. The engine recurses forward from these; the Corroboration
+# Engine greens what reality confirms. Each is a question + an outcome that
+# has not happened yet, with indicators (confirm) and falsifiers (refute).
+
+- id: T-001
+  question: "Is the US deliberately constricting global oil supply to force dependence on American energy at elevated prices?"
+  outcome: >
+    The US keeps the Strait of Hormuz and Bab el-Mandeb contested rather than resolved while expanding
+    domestic + Venezuelan supply, holding oil elevated to capture fiscal upside against the debt.
+  indicators:
+    - "Record tanker / war-risk insurance rates"
+    - "Venezuelan regime change with US-aligned oil access"
+    - "Repeated ceasefire failures at the chokepoints"
+    - "Oil holding elevated through disruptions"
+  falsifiers:
+    - "Sustained US diplomatic push to de-escalate both chokepoints"
+    - "Oil holds below $80 through a major Hormuz disruption"
+  horizon: 2029-01-01
+  domains: [energy, geopolitics, markets]
+
+- id: T-002
+  question: "Does AI displacement hollow out white-collar work faster than it touches the trades over the next 3 years?"
+  outcome: >
+    Knowledge-work headcount (legal, analyst, junior dev, support) contracts measurably while skilled-trades
+    wages rise, inverting the traditional class hierarchy of the knowledge economy.
+  indicators:
+    - "Major firms announce >10k AI-attributed white-collar cuts"
+    - "Trades wages outpace professional-services wages"
+    - "Entry-level knowledge-job postings decline sharply"
+  falsifiers:
+    - "White-collar employment stable or growing through 2027"
+    - "AI augmentation raises knowledge-work headcount"
+  horizon: 2028-06-01
+  domains: [tech, social, markets]
+
+- id: T-003
+  question: "Do NATO economies shift onto a sustained wartime industrial footing this decade?"
+  outcome: >
+    Defense spending stays structurally elevated (toward 3%+ GDP), munitions production is treated as
+    strategic capacity, and defense-industrial constituencies entrench continued procurement.
+  indicators:
+    - "Multi-year framework contracts for munitions/interceptors"
+    - "NATO members crossing 3% GDP defense spend"
+    - "Reshoring of critical defense supply chains"
+  falsifiers:
+    - "Broad defense budget cuts after a de-escalation"
+    - "Munitions backlogs cleared without capacity expansion"
+  horizon: 2029-01-01
+  domains: [military, markets, geopolitics]
+
+- id: T-004
+  question: "Does de-dollarization meaningfully accelerate via energy trade settled outside USD by 2028?"
+  outcome: >
+    A growing share of oil/LNG and BRICS-bloc trade settles in non-USD terms, eroding (not collapsing)
+    petrodollar leverage at the margin.
+  indicators:
+    - "New large bilateral non-USD energy settlement deals"
+    - "Central-bank gold accumulation continues"
+    - "Yuan-denominated commodity contracts gain volume"
+  falsifiers:
+    - "USD share of reserves and energy trade holds or rises"
+    - "BRICS settlement initiatives stall"
+  horizon: 2028-12-01
+  domains: [finance, geopolitics, energy]
