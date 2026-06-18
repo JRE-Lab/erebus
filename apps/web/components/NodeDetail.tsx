@@ -9,6 +9,8 @@ import {
   debateNode,
   shadowNode,
   synthesize,
+  fetchDirections,
+  pursueDirection,
 } from "@/lib/api";
 
 // ----------------------------------------------------------------------------
@@ -66,15 +68,65 @@ interface Props {
   selectedIds: string[];
   onRefresh: () => void;
   onClearSelection?: () => void;
+  /** Called after a direction is pursued into a new child node, with its id. */
+  onPursued?: (id: string) => void;
 }
 
 type Busy = null | "expand" | "debate" | "shadow" | "synthesize";
 
-export function NodeDetail({ nodeId, selectedIds, onRefresh, onClearSelection }: Props) {
+export function NodeDetail({ nodeId, selectedIds, onRefresh, onClearSelection, onPursued }: Props) {
   const [data, setData] = useState<NodeDetailData | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<Busy>(null);
   const [note, setNote] = useState<string | null>(null);
+
+  // --- interactive recursion: suggested directions + pursue ---------------
+  const [directions, setDirections] = useState<string[]>([]);
+  const [dirLoading, setDirLoading] = useState(false);
+  const [dirText, setDirText] = useState("");
+  const [pursuing, setPursuing] = useState(false);
+  const [analysis, setAnalysis] = useState<string | null>(null);
+  const [pursueNote, setPursueNote] = useState<string | null>(null);
+
+  const loadDirections = async (id: string) => {
+    setDirLoading(true);
+    try {
+      const r = await fetchDirections(id);
+      setDirections(r?.directions ?? []);
+    } catch {
+      setDirections([]);
+    } finally {
+      setDirLoading(false);
+    }
+  };
+
+  const pursue = async (text: string) => {
+    const trimmed = text.trim();
+    if (!nodeId || !trimmed || pursuing) return;
+    setPursuing(true);
+    setAnalysis(null);
+    setPursueNote(null);
+    try {
+      const r = await pursueDirection(nodeId, trimmed);
+      if (r?.blocked) {
+        setPursueNote(`Blocked: ${r.blocked}`);
+        if (r.analysis) setAnalysis(r.analysis);
+        return;
+      }
+      if (r?.analysis) setAnalysis(r.analysis);
+      onRefresh();
+      if (r?.node?.id) {
+        setDirText("");
+        onPursued?.(r.node.id);
+      } else {
+        setPursueNote("Pursued — no new branch was created.");
+      }
+    } catch {
+      setPursueNote("Pursue failed.");
+    } finally {
+      setPursuing(false);
+    }
+  };
 
   const load = async () => {
     if (!nodeId) {
@@ -99,6 +151,12 @@ export function NodeDetail({ nodeId, selectedIds, onRefresh, onClearSelection }:
 
   useEffect(() => {
     load();
+    // reset interactive-recursion state for the newly selected node
+    setDirections([]);
+    setDirText("");
+    setAnalysis(null);
+    setPursueNote(null);
+    if (nodeId) loadDirections(nodeId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeId]);
 
@@ -202,7 +260,10 @@ export function NodeDetail({ nodeId, selectedIds, onRefresh, onClearSelection }:
             <div>
               <div className="mb-2 flex items-center justify-between gap-2">
                 <span className="nx-mono text-xs text-nx-text-muted">{node.id}</span>
-                <StateBadge state={node.state as NodeState} />
+                <div className="flex items-center gap-1.5">
+                  <OriginBadge origin={node.origin} />
+                  <StateBadge state={node.state as NodeState} />
+                </div>
               </div>
               <h2 className="text-base font-semibold leading-snug text-nx-text-primary">
                 {node.question}
@@ -213,6 +274,98 @@ export function NodeDetail({ nodeId, selectedIds, onRefresh, onClearSelection }:
             <Section label="Forecast outcome">
               <p className="text-sm leading-relaxed text-nx-text-primary">{node.outcome}</p>
             </Section>
+
+            {/* DIRECTIONS TO PURSUE — interactive recursion driver */}
+            <div className="nx-card-elevated border-l-2 border-l-nx-indigo p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className="nx-label text-nx-indigo">Directions to pursue</span>
+                <button
+                  type="button"
+                  className="text-[11px] text-nx-text-muted transition-colors hover:text-nx-indigo disabled:opacity-50"
+                  disabled={dirLoading || !nodeId}
+                  onClick={() => nodeId && loadDirections(nodeId)}
+                  title="Suggest directions"
+                >
+                  {dirLoading ? (
+                    <span className="inline-flex items-center gap-1">
+                      <Spinner /> suggesting…
+                    </span>
+                  ) : (
+                    "↻ Suggest directions"
+                  )}
+                </button>
+              </div>
+
+              {/* suggested direction chips */}
+              {dirLoading && directions.length === 0 ? (
+                <div className="flex items-center gap-2 text-xs text-nx-text-muted">
+                  <Spinner /> finding game-theoretic branches…
+                </div>
+              ) : directions.length ? (
+                <div className="mb-3 flex flex-wrap gap-1.5">
+                  {directions.map((d, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      className="nx-chip nx-chip-indigo max-w-full text-left transition-colors hover:border-nx-indigo hover:bg-[rgba(99,102,241,0.16)] disabled:opacity-50"
+                      disabled={pursuing}
+                      onClick={() => setDirText(d)}
+                      title="Click to load into the box, then Pursue ▸"
+                    >
+                      <span className="line-clamp-2">{d}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="mb-3 text-xs italic text-nx-text-muted">
+                  no suggestions yet — write your own direction below
+                </p>
+              )}
+
+              {/* operator's own direction / response */}
+              <div className="nx-label mb-1.5">Your direction or response</div>
+              <textarea
+                className="nx-input min-h-[68px] resize-y text-sm"
+                placeholder="Pick a chip above, or write your own reasoning — EREBUS will game-theory it into the next branch."
+                value={dirText}
+                disabled={pursuing}
+                onChange={(e) => setDirText(e.target.value)}
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") pursue(dirText);
+                }}
+              />
+              <div className="mt-2 flex items-center justify-between gap-2">
+                {pursueNote ? (
+                  <span className="text-[11px] text-nx-text-secondary">{pursueNote}</span>
+                ) : (
+                  <span className="text-[11px] text-nx-text-muted">⌘/Ctrl + Enter to pursue</span>
+                )}
+                <button
+                  type="button"
+                  className="nx-btn nx-btn-primary"
+                  disabled={pursuing || !dirText.trim()}
+                  onClick={() => pursue(dirText)}
+                >
+                  {pursuing ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <Spinner /> Pursuing…
+                    </span>
+                  ) : (
+                    "Pursue ▸"
+                  )}
+                </button>
+              </div>
+
+              {/* game-theoretic analysis of the pursued direction */}
+              {analysis && (
+                <div className="mt-3 rounded-lg border border-nx-indigo/40 bg-[rgba(99,102,241,0.06)] p-3">
+                  <div className="nx-label mb-1 text-nx-indigo">Game-theoretic analysis</div>
+                  <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-nx-text-secondary">
+                    {analysis}
+                  </p>
+                </div>
+              )}
+            </div>
 
             {/* confirmation / confidence gradient */}
             <Section label="Confirmation — the green level">
@@ -428,6 +581,34 @@ function Field({ k, v }: { k: string; v?: string | null }) {
       <span className="nx-label">{k}</span>
       <p className="text-[12px] leading-snug text-nx-text-secondary">{v}</p>
     </div>
+  );
+}
+
+function OriginBadge({ origin }: { origin?: NodeRow["origin"] }) {
+  const erebus = origin === "erebus";
+  const color = erebus ? "var(--nx-amber)" : "var(--nx-indigo)";
+  return (
+    <span
+      className="nx-badge"
+      style={{ color, borderColor: color, background: `${erebus ? "#f59e0b" : "#6366f1"}1a` }}
+      title={erebus ? "Autonomously created by EREBUS" : "Created by you"}
+    >
+      <span className="nx-dot" style={{ background: color }} />
+      {erebus ? "EREBUS" : "you"}
+    </span>
+  );
+}
+
+function Spinner() {
+  return (
+    <span
+      className="inline-block h-3 w-3 animate-spin rounded-full border-[1.5px]"
+      style={{
+        borderColor: "var(--nx-border-strong)",
+        borderTopColor: "var(--nx-indigo)",
+      }}
+      aria-hidden
+    />
   );
 }
 

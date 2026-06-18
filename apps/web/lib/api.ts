@@ -164,6 +164,42 @@ function post<T>(path: string, body?: unknown): Promise<T> {
   });
 }
 
+function put<T>(path: string, body?: unknown): Promise<T> {
+  return req<T>(path, {
+    method: "PUT",
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+// --- interactive recursion + autonomy shapes --------------------------------
+
+export interface DirectionsResponse {
+  directions: string[];
+  cost: number;
+}
+
+export interface PursueResponse {
+  node: NodeRow | null;
+  analysis: string;
+  cost: number;
+  blocked?: string;
+}
+
+export interface RoamResponse {
+  status: "expanded" | "idle" | "blocked";
+  nodeId?: string;
+  expanded: number;
+  cost: number;
+  blocked?: string;
+}
+
+export interface AutonomousState {
+  enabled: boolean;
+  erebus_nodes?: number;
+  launch_points?: number;
+  greens?: number;
+}
+
 // --- public surface (matches the spec list exactly) -------------------------
 
 export const fetchHealth = () => req<HealthResponse>("/health");
@@ -207,3 +243,15 @@ export const makeContent = (id: string) =>
 
 export const fetchChanged = (since?: string) =>
   req<ChangedResponse>(`/changed${since ? `?since=${encodeURIComponent(since)}` : ""}`);
+
+// Interactive recursion: suggested directions + pursue a direction/response.
+export const fetchDirections = (id: string) =>
+  req<DirectionsResponse>(`/nodes/${encodeURIComponent(id)}/directions`);
+
+export const pursueDirection = (id: string, direction: string) =>
+  post<PursueResponse>(`/nodes/${encodeURIComponent(id)}/pursue`, { direction });
+
+// Autonomous roam mode.
+export const roam = () => post<RoamResponse>("/roam");
+export const fetchAutonomous = () => req<AutonomousState>("/autonomous");
+export const setAutonomous = (enabled: boolean) => put<AutonomousState>("/autonomous", { enabled });

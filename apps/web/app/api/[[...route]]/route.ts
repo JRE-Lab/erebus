@@ -14,6 +14,9 @@ import {
   createForecast,
   expandForward,
   synthesizeBranches,
+  suggestDirections,
+  pursueDirection,
+  roamOnce,
   listNodes,
   getSubtree,
 } from "@erebus/core";
@@ -31,6 +34,8 @@ import {
   nodes,
   embed,
   nearest,
+  getSetting,
+  setSetting,
 } from "@erebus/db";
 import { llmLive, runDebate } from "@erebus/agents";
 import { ingestAll } from "@erebus/ingest";
@@ -137,6 +142,52 @@ app.post("/nodes", (c) =>
 // POST /api/nodes/:id/expand -> forward-expand (the recursion).
 app.post("/nodes/:id/expand", (c) =>
   guard(c, async () => c.json(await expandForward(c.req.param("id"))))
+);
+
+// GET /api/nodes/:id/directions -> suggested directions to pursue from here.
+app.get("/nodes/:id/directions", (c) =>
+  guard(c, async () => c.json(await suggestDirections(c.req.param("id"))))
+);
+
+// POST /api/nodes/:id/pursue { direction } -> game-theoretic analysis of the
+// operator's direction/response -> a new child forecast. Interactive recursion.
+app.post("/nodes/:id/pursue", (c) =>
+  guard(c, async () => {
+    const body = await c.req.json().catch(() => ({}));
+    const direction = typeof body?.direction === "string" ? body.direction.trim() : "";
+    if (!direction) return c.json({ error: "direction required" }, 400);
+    return c.json(await pursueDirection(c.req.param("id"), direction));
+  })
+);
+
+// POST /api/roam -> one autonomous step now (EREBUS picks a node + branches it).
+app.post("/roam", (c) => guard(c, async () => c.json(await roamOnce())));
+
+// GET /api/autonomous -> roam toggle + counts.
+app.get("/autonomous", (c) =>
+  guard(c, async () => {
+    const a = await getSetting<{ enabled: boolean }>("autonomous", { enabled: true });
+    const [counts] = (
+      await pool.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE origin='erebus')::int AS erebus_nodes,
+           COUNT(*) FILTER (WHERE is_launch_point)::int AS launch_points,
+           COUNT(*) FILTER (WHERE state IN ('corroborated','resolved_true'))::int AS greens
+         FROM nodes`
+      )
+    ).rows;
+    return c.json({ enabled: a.enabled, ...counts });
+  })
+);
+
+// PUT /api/autonomous { enabled } -> pause/resume EREBUS roaming.
+app.put("/autonomous", (c) =>
+  guard(c, async () => {
+    const body = await c.req.json().catch(() => ({}));
+    const enabled = Boolean(body?.enabled);
+    await setSetting("autonomous", { enabled });
+    return c.json({ enabled });
+  })
 );
 
 // POST /api/nodes/:id/debate { rounds? } -> N-round cross-examination.
@@ -292,3 +343,4 @@ app.get("/changed", (c) =>
 
 export const GET = handle(app);
 export const POST = handle(app);
+export const PUT = handle(app);

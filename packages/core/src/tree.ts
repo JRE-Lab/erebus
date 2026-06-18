@@ -6,6 +6,8 @@ import {
   generateForecastPrompt,
   expandForwardPrompt,
   synthesizeBranchesPrompt,
+  suggestDirectionsPrompt,
+  pursuePrompt,
   PROMPT_VERSION,
 } from "@erebus/agents";
 import type { NodeRow, TreeNode } from "./types.js";
@@ -84,7 +86,8 @@ export async function createForecast(
 }
 
 export async function expandForward(
-  nodeId: string
+  nodeId: string,
+  origin: "user" | "erebus" = "user"
 ): Promise<{ children: NodeRow[]; cost: number; blocked?: string }> {
   const depth = await depthOf(nodeId);
   if (depth + 1 > MAX_DEPTH) return { children: [], cost: 0, blocked: `max depth ${MAX_DEPTH}` };
@@ -121,6 +124,7 @@ export async function expandForward(
         domains: child.domains ?? node.domains ?? [],
         parentId: nodeId,
         branchLabel: String.fromCharCode(64 + n),
+        origin,
         embedding: emb,
       })
       .onConflictDoNothing()
@@ -165,6 +169,79 @@ export async function synthesizeBranches(
     .returning();
   await recordEvent({ nodeId: id, kind: "synthesized", causeType: "job", after: { synthesizedFrom: nodeIds } });
   return { node: node!, cost };
+}
+
+// Suggest directions to pursue from a node (on-demand, not stored).
+export async function suggestDirections(nodeId: string): Promise<{ directions: string[]; cost: number }> {
+  const [node] = await db.select().from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+  if (!node) return { directions: [], cost: 0 };
+  const { data, cost } = await callJSON<{ directions: string[] }>(
+    suggestDirectionsPrompt({ question: node.question, outcome: node.outcome }),
+    { directions: [] },
+    { tier: "sonnet", agent: "suggest-directions", targetNode: nodeId, maxTokens: 800 }
+  );
+  return { directions: data.directions ?? [], cost };
+}
+
+// Pursue a direction or the operator's own response: game-theoretic analysis ->
+// a new child forecast. This is the interactive recursion driver.
+export async function pursueDirection(
+  nodeId: string,
+  direction: string
+): Promise<{ node: NodeRow | null; analysis: string; cost: number; blocked?: string }> {
+  const depth = await depthOf(nodeId);
+  if (depth + 1 > MAX_DEPTH) return { node: null, analysis: "", cost: 0, blocked: `max depth ${MAX_DEPTH}` };
+  const [parent] = await db.select().from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+  if (!parent) return { node: null, analysis: "", cost: 0, blocked: "node not found" };
+
+  const fallback = {
+    analysis: `[offline] Could not analyze: ${direction}`,
+    question: direction.slice(0, 200),
+    outcome: "[offline] forecast pending",
+    rationale: "",
+    indicators: [] as string[],
+    falsifiers: [] as string[],
+    horizon: null as string | null,
+    domains: [] as string[],
+  };
+  const { data, cost } = await callJSON<typeof fallback>(
+    pursuePrompt({ question: parent.question, outcome: parent.outcome }, direction),
+    fallback,
+    { tier: "opus", agent: "pursue", targetNode: nodeId, maxTokens: 2500 }
+  );
+
+  const existing = await db.select({ id: nodes.id }).from(nodes).where(eq(nodes.parentId, nodeId));
+  const n = existing.length + 1;
+  const childId = `${nodeId}.${n}`;
+  const emb = await embedExpr(`${data.question}\n${data.outcome}`);
+  const [node] = await db
+    .insert(nodes)
+    .values({
+      id: childId,
+      question: data.question || direction.slice(0, 200),
+      outcome: data.outcome || "",
+      rationale: data.rationale ?? null,
+      indicators: data.indicators ?? [],
+      falsifiers: data.falsifiers ?? [],
+      horizon: data.horizon ? new Date(data.horizon) : null,
+      domains: data.domains ?? parent.domains ?? [],
+      parentId: nodeId,
+      branchLabel: String.fromCharCode(64 + n),
+      origin: "user",
+      embedding: emb,
+    })
+    .onConflictDoNothing()
+    .returning();
+  if (node) {
+    await recordEvent({
+      nodeId: childId,
+      kind: "created",
+      causeType: "job",
+      after: { pursued: direction, analysis: data.analysis },
+      promptVersion: PROMPT_VERSION,
+    });
+  }
+  return { node: node ?? null, analysis: data.analysis ?? "", cost };
 }
 
 export async function listNodes(): Promise<NodeRow[]> {

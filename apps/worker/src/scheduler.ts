@@ -12,7 +12,7 @@
 // ingest is staggered ~20s after start so the first cycle has reality to chew on.
 // ============================================================================
 import { sql, desc } from "drizzle-orm";
-import { db, nodes, worldviewSnapshots, recordEvent } from "@erebus/db";
+import { db, nodes, worldviewSnapshots, recordEvent, getSetting } from "@erebus/db";
 import { listNodes, calibrationScore } from "@erebus/core";
 import { ingestAll } from "@erebus/ingest";
 import { runGardener } from "@erebus/gardener";
@@ -130,7 +130,12 @@ export function startScheduler(): SchedulerHandle {
   );
 
   const ingestTick = guarded("ingest", () => ingestAll());
-  const cycleTick = guarded("cycle", () => runCycle());
+  // Autonomous roaming respects the UI toggle (settings.autonomous, default on).
+  const cycleTick = guarded("cycle", async () => {
+    const a = await getSetting<{ enabled: boolean }>("autonomous", { enabled: true });
+    if (!a.enabled) return { skipped: "autonomous paused" };
+    return runCycle();
+  });
   const gardenTick = guarded("garden", () => runGardener());
   const wvTick = guarded("worldview", () => worldviewTick());
 

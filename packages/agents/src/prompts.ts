@@ -105,6 +105,45 @@ REFUTE FALSIFIERS: ${node.falsifiers.join(" | ") || "(none)"}
 Return JSON: { "effect": "confirm|refute|neutral", "weight": 0.0, "rationale": "one sentence citing the specific overlap" }`;
 }
 
+// --- Suggested directions to pursue from a node -----------------------------
+export function suggestDirectionsPrompt(node: { question: string; outcome: string }): string {
+  return `${PERSONA}
+
+A forecast node:
+QUESTION: ${node.question}
+OUTCOME: ${node.outcome}
+
+Propose 5 distinct, sharp DIRECTIONS to pursue from here — each a different branch of decision/logic worth exploring forward (consequences, actor responses, second-order effects, failure modes, wildcards). Keep each to one probing sentence.
+
+Return JSON: { "directions": ["...","...","...","...","..."] }`;
+}
+
+// --- Pursue a direction / the operator's own response (game-theoretic) -------
+export function pursuePrompt(node: { question: string; outcome: string }, direction: string): string {
+  return `${PERSONA}
+
+PARENT FORECAST:
+QUESTION: ${node.question}
+OUTCOME (assume it holds): ${node.outcome}
+
+THE OPERATOR WANTS TO PURSUE THIS DIRECTION / OFFERS THIS RESPONSE:
+"${direction}"
+
+Analyze it game-theoretically: name the key actors and their incentives, the moves and counter-moves it implies, and the likely equilibrium. Engage the operator's reasoning directly — agree, sharpen, or push back. Then crystallize the result into a NEW downstream forecast node.
+
+Return JSON:
+{
+  "analysis": "2-3 paragraph game-theoretic analysis engaging the operator's direction (actors, incentives, moves/counter-moves, equilibrium)",
+  "question": "the new question this direction opens",
+  "outcome": "a specific not-yet-happened outcome (the new forecast)",
+  "rationale": "the causal/strategic logic linking parent + direction to this outcome",
+  "indicators": ["2-4 signals that CONFIRM"],
+  "falsifiers": ["1-3 that REFUTE"],
+  "horizon": "ISO date",
+  "domains": ["..."]
+}`;
+}
+
 // --- Shadow Board: deception analysis ---------------------------------------
 export function shadowReadPrompt(node: { question: string; outcome: string }): string {
   return `${PERSONA}

@@ -8,6 +8,13 @@
       "when": 1781739953180,
       "tag": "0000_lame_synch",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1781742304494,
+      "tag": "0001_bumpy_sentinels",
+      "breakpoints": true
     }
   ]
 }

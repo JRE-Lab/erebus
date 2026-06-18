@@ -40,6 +40,7 @@ export const nodes = pgTable(
     resolved: boolean("resolved"),
     brier: real("brier"),
     isLaunchPoint: boolean("is_launch_point").notNull().default(false),
+    origin: text("origin").notNull().default("user"), // user | erebus (autonomous)
     domains: text("domains").array().notNull().default([]),
     embedding: vector("embedding", { dimensions: EMB_DIM }),
     lastValidatedAt: timestamp("last_validated_at", { withTimezone: true }),
@@ -187,6 +188,13 @@ export const contentItems = pgTable("content_items", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// --- settings: key/value app config (autonomous toggle, etc.) ---------------
+export const settings = pgTable("settings", {
+  key: text("key").primaryKey(),
+  value: jsonb("value").notNull().default({}),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const schema = {
   nodes,
   signals,
@@ -199,4 +207,5 @@ export const schema = {
   gardenerActions,
   worldviewSnapshots,
   contentItems,
+  settings,
 };

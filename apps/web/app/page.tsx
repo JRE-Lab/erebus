@@ -2,7 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { NodeRow } from "@erebus/core/client";
-import { fetchTree, triggerIngest } from "@/lib/api";
+import {
+  fetchTree,
+  triggerIngest,
+  fetchAutonomous,
+  setAutonomous,
+  roam,
+  type AutonomousState,
+} from "@/lib/api";
 import { ForecastTree } from "@/components/ForecastTree";
 import { NodeDetail } from "@/components/NodeDetail";
 import { SignalFeed } from "@/components/SignalFeed";
@@ -40,6 +47,12 @@ export default function ExplorerPage() {
   const [primary, setPrimary] = useState<string | null>(null);
   const [ingesting, setIngesting] = useState(false);
 
+  // autonomy: server-side roam worker state + manual roam
+  const [auto, setAuto] = useState<AutonomousState | null>(null);
+  const [autoBusy, setAutoBusy] = useState(false);
+  const [roaming, setRoaming] = useState(false);
+  const [roamNote, setRoamNote] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     try {
       const t = await fetchTree();
@@ -51,11 +64,63 @@ export default function ExplorerPage() {
     }
   }, []);
 
+  const loadAuto = useCallback(async () => {
+    try {
+      setAuto(await fetchAutonomous());
+    } catch {
+      /* offline-safe: leave previous state */
+    }
+  }, []);
+
   useEffect(() => {
     load();
-    const id = setInterval(load, 10000); // poll so the tree greens live
+    loadAuto();
+    const id = setInterval(() => {
+      load();
+      loadAuto(); // keep autonomous counts live while EREBUS roams
+    }, 10000); // poll so the tree greens live
     return () => clearInterval(id);
-  }, [load]);
+  }, [load, loadAuto]);
+
+  const toggleAuto = async () => {
+    const next = !(auto?.enabled ?? false);
+    setAutoBusy(true);
+    try {
+      const r = await setAutonomous(next);
+      setAuto((prev) => ({ ...(prev ?? {}), ...r }));
+      await loadAuto();
+    } catch {
+      /* offline-safe */
+    } finally {
+      setAutoBusy(false);
+    }
+  };
+
+  const roamOnce = async () => {
+    setRoaming(true);
+    setRoamNote(null);
+    try {
+      const r = await roam();
+      if (r.status === "blocked") setRoamNote(`Roam blocked: ${r.blocked ?? "unavailable"}`);
+      else if (r.status === "idle") setRoamNote("Roam idle — nothing worth expanding right now.");
+      else
+        setRoamNote(
+          `Roamed → expanded ${r.expanded} branch${r.expanded === 1 ? "" : "es"}${
+            r.nodeId ? ` from ${r.nodeId}` : ""
+          }.`
+        );
+      await load();
+      await loadAuto();
+      if (r.nodeId) {
+        setPrimary(r.nodeId);
+        setSelectedIds([r.nodeId]);
+      }
+    } catch {
+      setRoamNote("Roam failed.");
+    } finally {
+      setRoaming(false);
+    }
+  };
 
   const onSelect = useCallback((id: string, additive: boolean) => {
     setPrimary(id);
@@ -72,6 +137,16 @@ export default function ExplorerPage() {
     setPrimary(null);
   }, []);
 
+  // after NodeDetail pursues a direction, refresh the tree and jump to the new child
+  const onPursued = useCallback(
+    async (id: string) => {
+      await load();
+      setPrimary(id);
+      setSelectedIds([id]);
+    },
+    [load]
+  );
+
   const runIngest = async () => {
     setIngesting(true);
     try {
@@ -86,6 +161,13 @@ export default function ExplorerPage() {
 
   const greens = useMemo(() => nodes.filter((n) => GREEN.has(n.state)).length, [nodes]);
   const launchPoints = useMemo(() => nodes.filter((n) => n.isLaunchPoint).length, [nodes]);
+  const erebusNodes = useMemo(() => nodes.filter((n) => n.origin === "erebus").length, [nodes]);
+
+  // prefer server-reported counts (whole worldview) and fall back to the loaded tree
+  const greensShown = auto?.greens ?? greens;
+  const launchShown = auto?.launch_points ?? launchPoints;
+  const erebusShown = auto?.erebus_nodes ?? erebusNodes;
+  const autoOn = auto?.enabled ?? false;
 
   return (
     <div className="flex h-full min-h-0">
@@ -95,8 +177,9 @@ export default function ExplorerPage() {
           <Composer onCreated={load} />
           <div className="flex flex-wrap items-center gap-3">
             <Stat label="nodes" value={nodes.length} />
-            <Stat label="greens" value={greens} accent="var(--nx-green)" glow />
-            <Stat label="launch points" value={launchPoints} accent="var(--nx-green)" />
+            <Stat label="greens" value={greensShown} accent="var(--nx-green)" glow />
+            <Stat label="launch points" value={launchShown} accent="var(--nx-green)" />
+            <Stat label="erebus-made" value={erebusShown} accent="var(--nx-amber)" />
             <div className="ml-auto flex items-center gap-2">
               {selectedIds.length >= 2 && (
                 <span className="nx-chip nx-chip-indigo">{selectedIds.length} selected</span>
@@ -110,6 +193,67 @@ export default function ExplorerPage() {
                 {ingesting ? "Running…" : "Run ingest"}
               </button>
             </div>
+          </div>
+
+          {/* AUTONOMOUS control cluster */}
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-nx-border bg-nx-bg-card/60 px-3 py-2">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoOn}
+              disabled={autoBusy}
+              onClick={toggleAuto}
+              className="group flex items-center gap-2 disabled:opacity-50"
+              title={autoOn ? "EREBUS is roaming on its own" : "Let EREBUS roam on its own"}
+            >
+              <span
+                className="relative inline-flex h-5 w-9 items-center rounded-full transition-colors"
+                style={{
+                  background: autoOn ? "var(--nx-amber)" : "var(--nx-border-strong)",
+                }}
+              >
+                <span
+                  className="inline-block h-4 w-4 rounded-full bg-white transition-transform"
+                  style={{ transform: autoOn ? "translateX(18px)" : "translateX(2px)" }}
+                />
+              </span>
+              <span className="nx-label" style={{ color: autoOn ? "var(--nx-amber)" : undefined }}>
+                EREBUS Autonomous · {autoBusy ? "…" : autoOn ? "ON" : "OFF"}
+              </span>
+            </button>
+
+            {autoOn && (
+              <span className="nx-chip" style={{ color: "var(--nx-amber)", borderColor: "var(--nx-amber)" }}>
+                <span className="nx-dot" style={{ background: "var(--nx-amber)" }} />
+                roaming
+              </span>
+            )}
+
+            <button
+              type="button"
+              className="nx-btn"
+              disabled={roaming}
+              onClick={roamOnce}
+              title="Have EREBUS pick a branch and expand it once"
+            >
+              {roaming ? "Roaming…" : "Roam once ▸"}
+            </button>
+
+            {roamNote && (
+              <span className="text-[11px] text-nx-text-secondary">{roamNote}</span>
+            )}
+
+            <span className="ml-auto flex items-center gap-3 text-[11px] text-nx-text-muted">
+              <span>
+                greens <span className="nx-mono text-nx-text-secondary">{greensShown}</span>
+              </span>
+              <span>
+                launch <span className="nx-mono text-nx-text-secondary">{launchShown}</span>
+              </span>
+              <span>
+                erebus <span className="nx-mono" style={{ color: "var(--nx-amber)" }}>{erebusShown}</span>
+              </span>
+            </span>
           </div>
         </div>
         <div className="min-h-0 flex-1 border-t border-nx-border">
@@ -135,6 +279,7 @@ export default function ExplorerPage() {
           selectedIds={selectedIds}
           onRefresh={load}
           onClearSelection={clearSelection}
+          onPursued={onPursued}
         />
       </aside>
 

@@ -6,3 +6,4 @@ export { toVector, nearest } from "./vector.js";
 export type { Neighbor } from "./vector.js";
 export { recordEvent } from "./provenance.js";
 export type { EventInput } from "./provenance.js";
+export { getSetting, setSetting } from "./settings.js";
