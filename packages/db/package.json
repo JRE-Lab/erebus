@@ -10,6 +10,7 @@
     "generate": "drizzle-kit generate --config=../../drizzle.config.ts",
     "migrate": "tsx src/migrate.ts",
     "seed": "tsx src/seed.ts",
+    "reembed": "tsx src/reembed.ts",
     "typecheck": "tsc --noEmit",
     "build": "echo 'db: source-only'",
     "clean": "rm -rf dist .turbo"
