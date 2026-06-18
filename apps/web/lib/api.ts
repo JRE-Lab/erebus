@@ -12,6 +12,7 @@ const BASE = "/api";
 export interface HealthResponse {
   status: string;
   llm: "live" | "offline";
+  paused?: boolean;
 }
 
 export interface CreateForecastResponse {
@@ -256,6 +257,10 @@ export const fetchDirections = (id: string) =>
 
 export const pursueDirection = (id: string, direction: string) =>
   post<PursueResponse>(`/nodes/${encodeURIComponent(id)}/pursue`, { direction });
+
+// Global pause kill-switch (stops ALL spend: LLM + embeddings + worker).
+export const fetchPaused = () => req<{ paused: boolean }>("/paused");
+export const setPausedState = (paused: boolean) => put<{ paused: boolean }>("/paused", { paused });
 
 // Autonomous roam mode.
 export const roam = () => post<RoamResponse>("/roam");

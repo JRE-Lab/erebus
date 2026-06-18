@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { fetchHealth, fetchCost } from "@/lib/api";
+import { fetchHealth, fetchCost, setPausedState } from "@/lib/api";
 
 // Defensive shapes — the api layer is owned elsewhere; we read loosely so an
 // offline / partial response never crashes the chrome.
-type HealthLike = { ok?: boolean; db?: boolean; status?: string; healthy?: boolean } | null;
+type HealthLike = { ok?: boolean; db?: boolean; status?: string; healthy?: boolean; paused?: boolean } | null;
 type CostLike =
   | { today?: number; todayUsd?: number; total?: number; budget?: number; daily?: number }
   | number
@@ -36,6 +36,8 @@ export function HealthBar() {
   const [health, setHealth] = useState<HealthLike>(null);
   const [cost, setCost] = useState<CostLike>(null);
   const [reached, setReached] = useState(false);
+  const [paused, setPausedUi] = useState(false);
+  const [pauseBusy, setPauseBusy] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -48,6 +50,9 @@ export function HealthBar() {
         if (!alive) return;
         setHealth(h as HealthLike);
         setCost(c as CostLike);
+        if (h && typeof (h as HealthLike)?.paused === "boolean" && !pauseBusy) {
+          setPausedUi(Boolean((h as HealthLike)?.paused));
+        }
         setReached(true);
       } catch {
         if (alive) setReached(true);
@@ -59,7 +64,21 @@ export function HealthBar() {
       alive = false;
       clearInterval(id);
     };
-  }, []);
+  }, [pauseBusy]);
+
+  const togglePause = async () => {
+    setPauseBusy(true);
+    const next = !paused;
+    setPausedUi(next); // optimistic
+    try {
+      const r = await setPausedState(next);
+      setPausedUi(Boolean(r.paused));
+    } catch {
+      setPausedUi(!next); // revert on failure
+    } finally {
+      setPauseBusy(false);
+    }
+  };
 
   const live = isHealthy(health);
   const today = costToday(cost);
@@ -67,6 +86,22 @@ export function HealthBar() {
 
   return (
     <div className="flex items-center gap-4 text-xs">
+      {/* Global pause kill-switch — stops ALL spend (LLM + embeddings + worker) */}
+      <button
+        type="button"
+        onClick={togglePause}
+        disabled={pauseBusy}
+        title={paused ? "EREBUS is paused — no API spend. Click to resume." : "Pause ALL usage (LLM + embeddings + autonomous worker)"}
+        className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 font-semibold transition-colors disabled:opacity-60 ${paused ? "nx-pulse" : ""}`}
+        style={{
+          borderColor: paused ? "var(--nx-red)" : "var(--nx-border-strong)",
+          background: paused ? "rgba(239,68,68,0.16)" : "transparent",
+          color: paused ? "var(--nx-red)" : "var(--nx-text-secondary)",
+        }}
+      >
+        <span>{paused ? "▶" : "⏸"}</span>
+        <span>{pauseBusy ? "…" : paused ? "PAUSED — Resume" : "Pause"}</span>
+      </button>
       <div className="flex items-center gap-2">
         <span
           className={`nx-dot ${!reached ? "nx-dot-idle" : live ? "nx-dot-live" : "nx-dot-down"}`}

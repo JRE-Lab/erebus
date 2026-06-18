@@ -7,7 +7,7 @@
 // Every call logs spend to exploration_jobs. Offline only if NO provider key.
 // ============================================================================
 import Anthropic from "@anthropic-ai/sdk";
-import { db, explorationJobs } from "@erebus/db";
+import { db, explorationJobs, isPaused } from "@erebus/db";
 
 const PROVIDER = (process.env.LLM_PROVIDER || "auto").toLowerCase();
 const OPUS = process.env.OPUS_MODEL || "claude-opus-4-8";
@@ -113,6 +113,10 @@ function providerOrder(): Array<"anthropic" | "openai"> {
 }
 
 export async function call(prompt: string, opts: CallOpts = {}): Promise<LLMResult> {
+  // Global pause kill-switch — no spend while paused.
+  if (await isPaused()) {
+    return { content: "", cost: 0, model: "paused", offline: true, usage: { input: 0, output: 0 } };
+  }
   const order = providerOrder();
   if (order.length === 0) {
     return { content: "", cost: 0, model: "none", offline: true, usage: { input: 0, output: 0 } };

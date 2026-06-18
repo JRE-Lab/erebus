@@ -36,6 +36,8 @@ import {
   nearest,
   getSetting,
   setSetting,
+  isPaused,
+  setPaused,
 } from "@erebus/db";
 import { llmLive, runDebate } from "@erebus/agents";
 import { ingestAll, matchNode, rematchRecent } from "@erebus/ingest";
@@ -63,9 +65,22 @@ async function guard(c: Context, fn: () => Promise<Response>): Promise<Response>
 
 const app = new Hono().basePath("/api");
 
-// GET /api/health -> liveness + LLM status.
+// GET /api/health -> liveness + LLM status + global pause state.
 app.get("/health", (c) =>
-  guard(c, async () => c.json({ status: "ok", llm: llmLive() ? "live" : "offline" }))
+  guard(c, async () => c.json({ status: "ok", llm: llmLive() ? "live" : "offline", paused: await isPaused() }))
+);
+
+// GET /api/paused -> global kill-switch state.
+app.get("/paused", (c) => guard(c, async () => c.json({ paused: await isPaused() })));
+
+// PUT /api/paused { paused } -> stop/resume ALL spend (LLM + embeddings + worker).
+app.put("/paused", (c) =>
+  guard(c, async () => {
+    const body = await c.req.json().catch(() => ({}));
+    const paused = Boolean(body?.paused);
+    await setPaused(paused);
+    return c.json({ paused });
+  })
 );
 
 // GET /api/nodes -> all nodes (flat).

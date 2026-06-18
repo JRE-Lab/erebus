@@ -12,7 +12,7 @@
 // ingest is staggered ~20s after start so the first cycle has reality to chew on.
 // ============================================================================
 import { sql, desc } from "drizzle-orm";
-import { db, nodes, worldviewSnapshots, recordEvent, getSetting } from "@erebus/db";
+import { db, nodes, worldviewSnapshots, recordEvent, getSetting, isPaused } from "@erebus/db";
 import { listNodes, calibrationScore } from "@erebus/core";
 import { ingestAll, rematchRecent } from "@erebus/ingest";
 import { runGardener } from "@erebus/gardener";
@@ -33,6 +33,11 @@ function guarded(name: string, fn: () => Promise<unknown>): () => Promise<void> 
   return async () => {
     if (running) {
       console.log(`[scheduler] ${name} still running — skipping this tick`);
+      return;
+    }
+    // Global pause kill-switch — skip all autonomous work while paused.
+    if (await isPaused()) {
+      console.log(`[scheduler] ${name} skipped — paused`);
       return;
     }
     running = true;
