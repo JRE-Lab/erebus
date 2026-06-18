@@ -8,8 +8,9 @@ import { db, signals, embed, toVector } from "@erebus/db";
 import { dedupHashFor } from "./rss.js";
 
 const TIMEOUT_MS = 15_000;
+// English-only to avoid GDELT's multilingual noise.
 const DEFAULT_QUERY =
-  '(oil OR sanctions OR "strait of hormuz" OR military OR nuclear OR tariff OR escalation OR ceasefire OR "central bank" OR election OR semiconductor)';
+  '(oil OR sanctions OR "strait of hormuz" OR military OR nuclear OR tariff OR escalation OR ceasefire OR "central bank" OR election OR semiconductor) sourcelang:english';
 
 interface GdeltArticle {
   url?: string;
@@ -37,21 +38,35 @@ export async function ingestGdelt(): Promise<string[]> {
     query
   )}&mode=ArtList&format=json&maxrecords=${max}&timespan=1d&sort=DateDesc`;
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  // GDELT throttles to 1 request / 5s and replies with a plain-text notice when
+  // exceeded. Read as text, parse defensively, and retry once after a pause.
+  async function pull(): Promise<GdeltArticle[]> {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+    try {
+      const res = await fetch(url, {
+        signal: ctrl.signal,
+        headers: { "user-agent": "erebus-ingest/2.0 (+corroboration-engine)" },
+      });
+      if (!res.ok) return [];
+      const text = await res.text();
+      if (!text.trimStart().startsWith("{")) throw new Error("non-json (rate limit?)");
+      return ((JSON.parse(text) as { articles?: GdeltArticle[] }).articles ?? []);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   let articles: GdeltArticle[] = [];
   try {
-    const res = await fetch(url, {
-      signal: ctrl.signal,
-      headers: { "user-agent": "erebus-ingest/2.0 (+corroboration-engine)" },
-    });
-    if (!res.ok) return [];
-    const j = (await res.json()) as { articles?: GdeltArticle[] };
-    articles = j.articles ?? [];
+    articles = await pull();
   } catch {
-    return [];
-  } finally {
-    clearTimeout(timer);
+    await new Promise((r) => setTimeout(r, 6000));
+    try {
+      articles = await pull();
+    } catch {
+      return [];
+    }
   }
 
   const inserted: string[] = [];
