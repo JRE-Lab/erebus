@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { NodeRow } from "@erebus/core/client";
+import type { NodeRow, NodeState } from "@erebus/core/client";
+import { STATE_COLORS } from "@erebus/core/client";
 import {
   fetchTree,
   triggerIngest,
@@ -46,6 +47,8 @@ export default function ExplorerPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [primary, setPrimary] = useState<string | null>(null);
   const [ingesting, setIngesting] = useState(false);
+  // focus a single theory (root) onto its own graph; null = all theories
+  const [focusRoot, setFocusRoot] = useState<string | null>(null);
 
   // autonomy: server-side roam worker state + manual roam
   const [auto, setAuto] = useState<AutonomousState | null>(null);
@@ -163,14 +166,132 @@ export default function ExplorerPage() {
   const launchPoints = useMemo(() => nodes.filter((n) => n.isLaunchPoint).length, [nodes]);
   const erebusNodes = useMemo(() => nodes.filter((n) => n.origin === "erebus").length, [nodes]);
 
+  // roots = theories (no parent, or parent not loaded)
+  const roots = useMemo(() => {
+    const ids = new Set(nodes.map((n) => n.id));
+    return nodes
+      .filter((n) => !n.parentId || !ids.has(n.parentId))
+      .sort((a, b) => a.id.localeCompare(b.id));
+  }, [nodes]);
+
+  // children index, reused for focus filtering + per-theory stats
+  const childrenOf = useMemo(() => {
+    const m = new Map<string, NodeRow[]>();
+    for (const n of nodes) {
+      if (!n.parentId) continue;
+      const a = m.get(n.parentId) ?? [];
+      a.push(n);
+      m.set(n.parentId, a);
+    }
+    return m;
+  }, [nodes]);
+
+  // subtree of a given root (the node + all descendants)
+  const subtreeOf = useCallback(
+    (rootId: string): NodeRow[] => {
+      const out: NodeRow[] = [];
+      const seen = new Set<string>();
+      const start = nodes.find((n) => n.id === rootId);
+      const stack: NodeRow[] = start ? [start] : [];
+      while (stack.length) {
+        const n = stack.pop()!;
+        if (seen.has(n.id)) continue;
+        seen.add(n.id);
+        out.push(n);
+        for (const c of childrenOf.get(n.id) ?? []) stack.push(c);
+      }
+      return out;
+    },
+    [nodes, childrenOf]
+  );
+
+  // what the graph renders: one theory's subtree when focused, else everything
+  const visibleNodes = useMemo(
+    () => (focusRoot ? subtreeOf(focusRoot) : nodes),
+    [focusRoot, subtreeOf, nodes]
+  );
+
+  // per-theory stats for the left panel
+  const rootStats = useMemo(() => {
+    const m = new Map<string, { count: number; greens: number }>();
+    for (const r of roots) {
+      const sub = subtreeOf(r.id);
+      m.set(r.id, { count: sub.length, greens: sub.filter((n) => GREEN.has(n.state)).length });
+    }
+    return m;
+  }, [roots, subtreeOf]);
+
   // prefer server-reported counts (whole worldview) and fall back to the loaded tree
   const greensShown = auto?.greens ?? greens;
   const launchShown = auto?.launch_points ?? launchPoints;
   const erebusShown = auto?.erebus_nodes ?? erebusNodes;
   const autoOn = auto?.enabled ?? false;
 
+  const focusedRoot = focusRoot ? roots.find((r) => r.id === focusRoot) ?? null : null;
+
   return (
     <div className="flex h-full min-h-0">
+      {/* left: theories panel — select one to branch it on its own graph */}
+      <aside className="hidden w-[230px] shrink-0 flex-col border-r border-nx-border lg:flex">
+        <div className="shrink-0 border-b border-nx-border p-3">
+          <div className="nx-label mb-2">Theories</div>
+          <button
+            onClick={() => setFocusRoot(null)}
+            className="w-full rounded-lg border p-2 text-left text-xs transition"
+            style={{
+              borderColor: focusRoot === null ? "var(--nx-indigo)" : "var(--nx-border)",
+              background: focusRoot === null ? "rgba(99,102,241,0.12)" : "transparent",
+              color: focusRoot === null ? "var(--nx-text-primary)" : "var(--nx-text-secondary)",
+            }}
+          >
+            ◈ All theories · {roots.length}
+          </button>
+        </div>
+        <div className="nx-scroll min-h-0 flex-1 space-y-1 p-2">
+          {roots.map((r) => {
+            const st = rootStats.get(r.id) ?? { count: 1, greens: 0 };
+            const active = focusRoot === r.id;
+            return (
+              <button
+                key={r.id}
+                onClick={() => {
+                  setFocusRoot(r.id);
+                  setPrimary(r.id);
+                  setSelectedIds([r.id]);
+                }}
+                className="w-full rounded-lg border p-2 text-left transition"
+                style={{
+                  borderColor: active ? "var(--nx-indigo)" : "var(--nx-border)",
+                  background: active ? "rgba(99,102,241,0.12)" : "transparent",
+                }}
+              >
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="nx-mono text-[10px] text-nx-text-muted">{r.id}</span>
+                  <span
+                    className="nx-dot"
+                    style={{ background: STATE_COLORS[r.state as NodeState] ?? STATE_COLORS.speculative }}
+                  />
+                </div>
+                <div className="line-clamp-2 text-xs leading-snug text-nx-text-primary">
+                  {r.question}
+                </div>
+                <div className="mt-1 text-[10px] text-nx-text-muted">
+                  {st.count} node{st.count === 1 ? "" : "s"}
+                  {st.greens > 0 && (
+                    <span style={{ color: "var(--nx-green)" }}> · {st.greens} green</span>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+          {roots.length === 0 && (
+            <p className="p-2 text-xs italic text-nx-text-muted">
+              No theories yet — seed one with the composer.
+            </p>
+          )}
+        </div>
+      </aside>
+
       {/* center column: composer + tree */}
       <section className="flex min-w-0 flex-1 flex-col">
         <div className="shrink-0 space-y-2 p-3">
@@ -180,6 +301,19 @@ export default function ExplorerPage() {
             <Stat label="greens" value={greensShown} accent="var(--nx-green)" glow />
             <Stat label="launch points" value={launchShown} accent="var(--nx-green)" />
             <Stat label="erebus-made" value={erebusShown} accent="var(--nx-amber)" />
+            {focusedRoot && (
+              <span className="nx-chip nx-chip-indigo" title={focusedRoot.question}>
+                focused · {focusedRoot.id}
+                <button
+                  type="button"
+                  className="ml-1.5 opacity-70 hover:opacity-100"
+                  onClick={() => setFocusRoot(null)}
+                  title="Show all theories"
+                >
+                  ✕
+                </button>
+              </span>
+            )}
             <div className="ml-auto flex items-center gap-2">
               {selectedIds.length >= 2 && (
                 <span className="nx-chip nx-chip-indigo">{selectedIds.length} selected</span>
@@ -263,7 +397,8 @@ export default function ExplorerPage() {
             </div>
           ) : (
             <ForecastTree
-              nodes={nodes}
+              key={focusRoot ?? "all"}
+              nodes={visibleNodes}
               selectedId={primary}
               selectedIds={selectedIds}
               onSelect={onSelect}
