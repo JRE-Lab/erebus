@@ -1,7 +1,7 @@
 # EREBUS web (Next 15 + mounted Hono API). Build context = repo root.
 FROM node:20-alpine
 WORKDIR /app
-RUN corepack enable
+RUN corepack enable && apk add --no-cache ffmpeg
 
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* tsconfig.base.json drizzle.config.ts ./
 COPY packages ./packages

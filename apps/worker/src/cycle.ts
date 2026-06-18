@@ -15,7 +15,7 @@
 // ============================================================================
 import { resolveDueNodes } from "@erebus/core";
 import { runDebate } from "@erebus/agents";
-import { ingestAll } from "@erebus/ingest";
+import { ingestAll, matchNode } from "@erebus/ingest";
 import { runShadowRead } from "@erebus/shadowboard";
 import { expandForward } from "@erebus/core";
 import {
@@ -123,6 +123,16 @@ export async function runCycle(opts: RunCycleOpts = {}): Promise<CycleSummary> {
       } else {
         childrenSpawned += exp.children.length;
         notes.push(`expand ${pick.nodeId} (${pick.reason}) -> ${exp.children.length} children`);
+        // Green the new branches against existing reality immediately, so an
+        // autonomously-grown node can corroborate from the current signal corpus
+        // instead of waiting for a future signal to coincidentally land near it.
+        for (const ch of exp.children) {
+          try {
+            await matchNode(ch.id);
+          } catch (e) {
+            notes.push(`match ${ch.id} failed: ${(e as Error).message}`);
+          }
+        }
       }
     } catch (e) {
       notes.push(`expand ${pick.nodeId} failed: ${(e as Error).message}`);

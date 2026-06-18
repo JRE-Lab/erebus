@@ -81,6 +81,39 @@ export interface RelationshipRow {
   createdAt: string;
 }
 
+export interface GamePlayer {
+  name: string;
+  type: string;
+  payoffRanking: string;
+  batna: string;
+  dominantStrategy: string;
+  patience: string;
+}
+export interface LeverageMove {
+  actor: string;
+  move: string;
+  mechanism: string;
+  expectedShift: string;
+  reversibility: string;
+}
+export interface GameReadRow {
+  id: string;
+  nodeId: string | null;
+  players: GamePlayer[];
+  gameType: string | null;
+  predictedEquilibrium: string | null;
+  equilibriumType: string | null;
+  outcomeIsEquilibrium: boolean | null;
+  stability: number | null;
+  fragilityDrivers: string[];
+  focalPoint: string | null;
+  leverageMoves: LeverageMove[];
+  noRegretAction: string | null;
+  reversalTripwire: string | null;
+  model: string | null;
+  createdAt: string;
+}
+
 export interface NodeDetail {
   node: NodeRow;
   signal_matches: SignalMatchWithSignal[];
@@ -88,6 +121,7 @@ export interface NodeDetail {
   shadow_reads: unknown[];
   events: unknown[];
   relationships: { from: RelationshipRow[]; to: RelationshipRow[] };
+  game_read?: GameReadRow | null;
 }
 
 export interface SearchResponse {
@@ -113,14 +147,23 @@ export interface CostResponse {
   jobs: number;
 }
 
+export interface ContentScene {
+  narration: string;
+  imagePrompt: string;
+  image?: string | null;
+}
+
 export interface ContentItem {
   id: string;
   nodeId: string | null;
+  title: string | null;
   script: string | null;
+  caption: string | null;
+  data: { hook?: string; scenes?: ContentScene[] } | null;
   audioUrl: string | null;
   videoUrl: string | null;
   platform: string | null;
-  status: string;
+  status: string; // draft|scripted|visualized|voiced|rendered|published
   publishedAt: string | null;
   createdAt: string;
 }
@@ -196,8 +239,43 @@ export interface RoamResponse {
   status: "expanded" | "idle" | "blocked";
   nodeId?: string;
   expanded: number;
+  childIds?: string[];
   cost: number;
   blocked?: string;
+}
+
+// --- market correlation -----------------------------------------------------
+export interface OverviewInstrument {
+  symbol: string;
+  name: string;
+  kind: string;
+  price: number | null;
+  asOf: string;
+  source: string;
+  d1: number | null;
+  d5: number | null;
+  d30: number | null;
+}
+export interface TheoryLink {
+  symbol: string;
+  name: string;
+  expectation: "up" | "down" | string;
+  rationale: string | null;
+  move: number | null;
+  verdict: "confirms" | "contradicts" | "neutral";
+}
+export interface TheoryCorrelation {
+  nodeId: string;
+  question: string;
+  state: string;
+  origin: string;
+  links: TheoryLink[];
+}
+export interface MarketOverview {
+  instruments: OverviewInstrument[];
+  theories: TheoryCorrelation[];
+  window: number;
+  threshold: number;
 }
 
 export interface AutonomousState {
@@ -230,6 +308,12 @@ export const debateNode = (id: string, rounds?: number) =>
 export const shadowNode = (id: string) =>
   post<ShadowResponse>(`/nodes/${encodeURIComponent(id)}/shadow`);
 
+// Game-theory read + decision layer.
+export const gameRead = (id: string) =>
+  post<{ gameRead: GameReadRow | null; cost: number; offline: boolean }>(
+    `/nodes/${encodeURIComponent(id)}/game`
+  );
+
 export const synthesize = (ids: string[]) => post<SynthesizeResponse>("/synthesize", { ids });
 
 export const fetchSignals = (limit?: number) =>
@@ -245,8 +329,29 @@ export const fetchCost = () => req<CostResponse>("/cost");
 
 export const fetchContent = () => req<ContentItem[]>("/content");
 
-export const makeContent = (id: string) =>
-  post<ContentItem>(`/content/${encodeURIComponent(id)}`);
+// Content Studio — granular pipeline steps the UI drives one at a time.
+export interface ScriptShape {
+  title: string;
+  hook: string;
+  script: string;
+  caption: string;
+  scenes: ContentScene[];
+}
+export const generateContentScript = (nodeId: string) =>
+  post<{ contentId: string; script: ScriptShape; cost: number; offline: boolean }>("/content/script", { nodeId });
+
+export const generateContentImages = (id: string) =>
+  post<{ images: number; cost: number }>(`/content/${encodeURIComponent(id)}/images`);
+
+export const generateContentVoice = (id: string) =>
+  post<{ audioUrl: string | null }>(`/content/${encodeURIComponent(id)}/voice`);
+
+export const generateContentVideo = (id: string) =>
+  post<{ videoUrl: string | null; note?: string }>(`/content/${encodeURIComponent(id)}/video`);
+
+// Full pipeline in one shot (script -> images -> voice -> video, best-effort).
+export const makeContent = (nodeId: string) =>
+  post<ContentItem>(`/content/${encodeURIComponent(nodeId)}/full`);
 
 export const fetchChanged = (since?: string) =>
   req<ChangedResponse>(`/changed${since ? `?since=${encodeURIComponent(since)}` : ""}`);
@@ -266,3 +371,15 @@ export const setPausedState = (paused: boolean) => put<{ paused: boolean }>("/pa
 export const roam = () => post<RoamResponse>("/roam");
 export const fetchAutonomous = () => req<AutonomousState>("/autonomous");
 export const setAutonomous = (enabled: boolean) => put<AutonomousState>("/autonomous", { enabled });
+
+// Continuous roam: worker branches back-to-back while on (budget-capped).
+export const fetchContinuousRoam = () => req<{ continuous: boolean }>("/roam/continuous");
+export const setContinuousRoam = (continuous: boolean) =>
+  put<{ continuous: boolean }>("/roam/continuous", { continuous });
+
+// Market correlation tab.
+export const fetchMarket = () => req<MarketOverview>("/market");
+export const mapMarket = (nodeId?: string) =>
+  post<{ mapped?: number; created: number; cost: number }>("/market/map", nodeId ? { nodeId } : {});
+export const refreshMarket = () =>
+  post<{ checked: number; signals: number; matches: number }>("/market/refresh");

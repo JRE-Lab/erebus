@@ -189,13 +189,74 @@ ${branches.map((b, i) => `${i + 1}. ${b.question} -> ${b.outcome}`).join("\n")}
 Return JSON: { "question": "the emergent question", "outcome": "the emergent forecast", "rationale": "why the combination yields this", "indicators": ["confirmers"], "falsifiers": ["refuters"], "horizon": "ISO date", "domains": ["..."] }`;
 }
 
-// --- Content Studio: node -> short-form script ------------------------------
+// --- Content Studio: node -> structured short-form script + storyboard ------
 export function contentScriptPrompt(node: { question: string; outcome: string; rationale?: string }): string {
   return `${PERSONA}
 
-Write a punchy 45-60 second short-form video script narrated by EREBUS (an AI intelligence persona). Hook in the first line. End on the forecast and what to watch.
+Write a punchy 45-60 second vertical short-form video, narrated by EREBUS (an AI intelligence persona), about this forecast. Hook hard in the first line; end on the forecast and what to watch. Then break it into 4-5 SCENES; each scene has one or two narration sentences and a vivid image prompt for an AI image generator (cinematic, dark intelligence-room / geopolitical aesthetic, no text in image).
 FORECAST: ${node.question} -> ${node.outcome}
 ${node.rationale ? `WHY: ${node.rationale}` : ""}
 
-Return JSON: { "title": "<=80 char title", "script": "the spoken narration", "hook": "first line", "caption": "social caption with 3-5 hashtags" }`;
+Return JSON:
+{
+  "title": "<=80 char title",
+  "hook": "the first spoken line",
+  "script": "the full spoken narration (all scenes joined)",
+  "caption": "social caption with 3-5 hashtags",
+  "scenes": [
+    { "narration": "this scene's spoken line(s)", "imagePrompt": "vivid cinematic image description, no text" }
+  ]
+}`;
+}
+
+// --- Game Read: structured game-theory model of a forecast ------------------
+export function gameReadPrompt(node: {
+  question: string;
+  outcome: string;
+  rationale?: string | null;
+}): string {
+  return `${PERSONA}
+
+Run a rigorous GAME-THEORY read of this forecast. Treat the forecast OUTCOME as a CLAIM that a specific equilibrium will obtain. Identify the real players, their incentives, and whether the predicted outcome is actually a STABLE equilibrium or a fragile knife-edge.
+
+FORECAST: ${node.question} -> ${node.outcome}
+${node.rationale ? `RATIONALE: ${node.rationale}` : ""}
+
+Reason like a strategist: dominant strategies, best responses, BATNA (each player's walk-away), credible commitments/threats, signaling, deterrence, Schelling/focal points, and whether repeated interaction sustains cooperation. STABILITY is the probability the predicted equilibrium HOLDS against small perturbations (1 = robust, 0 = one nudge flips it). Be honest: a forecast can be likely yet sit on an unstable equilibrium.
+
+Return JSON:
+{
+  "players": [
+    { "name": "actor", "type": "state|firm|faction|bloc|market", "payoffRanking": "their outcomes best->worst, terse", "batna": "their walk-away alternative", "dominantStrategy": "their likely move", "patience": "high|med|low (tolerance for a drawn-out game)" }
+  ],
+  "gameType": "one_shot|repeated|sequential",
+  "predictedEquilibrium": "the strategic configuration the forecast implies",
+  "equilibriumType": "nash|subgame_perfect|mixed|focal|none",
+  "outcomeIsEquilibrium": true,
+  "stability": 0.0,
+  "fragilityDrivers": ["the specific perturbations that would flip the equilibrium"]
+}`;
+}
+
+// --- Decision layer: turn the game read into a move under uncertainty -------
+export function decidePrompt(
+  node: { question: string; outcome: string },
+  gameRead: string
+): string {
+  return `${PERSONA}
+
+Given this forecast and its game-theory read, produce a DECISION an operator can act on NOW about something that has not yet happened. Find the highest-leverage move available, the focal point actors will converge on, the no-regret action under deep uncertainty (minimax-regret), and the single TRIPWIRE that should make the operator reverse.
+
+FORECAST: ${node.question} -> ${node.outcome}
+GAME READ (JSON): ${gameRead}
+
+Return JSON:
+{
+  "focalPoint": "the Schelling/focal point the players likely coordinate on",
+  "leverageMoves": [
+    { "actor": "who acts", "move": "the move", "mechanism": "commitment|signal|deterrence|side-payment|information", "expectedShift": "how it shifts the equilibrium", "reversibility": "high|med|low" }
+  ],
+  "noRegretAction": "the action that performs least-badly across the live scenarios",
+  "reversalTripwire": "the ONE observable that, if it occurs, means abandon/reverse the position"
+}`;
 }

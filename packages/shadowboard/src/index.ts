@@ -86,6 +86,15 @@ export async function runShadowRead(nodeId: string): Promise<ShadowReadResult> {
     const newId = contested.node.id;
     spawnedNode = newId;
 
+    // Connect the counter-forecast into the tree so it shows in the Explorer as
+    // a contesting branch of the analyzed node (not a disconnected root). Marked
+    // origin "shadow" + a ⚡ branch label so it reads as a tension branch.
+    const siblings = await db.select({ id: nodes.id }).from(nodes).where(eq(nodes.parentId, nodeId));
+    await db
+      .update(nodes)
+      .set({ parentId: nodeId, origin: "shadow", branchLabel: `⚡${siblings.length + 1}`, updatedAt: new Date() })
+      .where(eq(nodes.id, newId));
+
     const rationale = `Shadow Board counter-read of ${nodeId}: ${data.counter_narrative}`;
     await db.insert(relationships).values({
       fromNode: nodeId,

@@ -41,9 +41,15 @@ importers:
       '@erebus/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@erebus/gametheory':
+        specifier: workspace:*
+        version: link:../../packages/gametheory
       '@erebus/ingest':
         specifier: workspace:*
         version: link:../../packages/ingest
+      '@erebus/market':
+        specifier: workspace:*
+        version: link:../../packages/market
       '@erebus/shadowboard':
         specifier: workspace:*
         version: link:../../packages/shadowboard
@@ -111,6 +117,9 @@ importers:
       '@erebus/ingest':
         specifier: workspace:*
         version: link:../../packages/ingest
+      '@erebus/market':
+        specifier: workspace:*
+        version: link:../../packages/market
       '@erebus/shadowboard':
         specifier: workspace:*
         version: link:../../packages/shadowboard
@@ -226,6 +235,28 @@ importers:
         specifier: ^5.7.2
         version: 5.9.3
 
+  packages/gametheory:
+    dependencies:
+      '@erebus/agents':
+        specifier: workspace:*
+        version: link:../agents
+      '@erebus/core':
+        specifier: workspace:*
+        version: link:../core
+      '@erebus/db':
+        specifier: workspace:*
+        version: link:../db
+      drizzle-orm:
+        specifier: ^0.38.3
+        version: 0.38.4(@types/pg@8.20.0)(@types/react@19.2.17)(pg@8.21.0)(react@19.2.7)
+    devDependencies:
+      tsx:
+        specifier: ^4.19.2
+        version: 4.22.4
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
   packages/gardener:
     dependencies:
       '@erebus/core':
@@ -262,6 +293,28 @@ importers:
       fast-xml-parser:
         specifier: ^4.5.0
         version: 4.5.6
+    devDependencies:
+      tsx:
+        specifier: ^4.19.2
+        version: 4.22.4
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/market:
+    dependencies:
+      '@erebus/agents':
+        specifier: workspace:*
+        version: link:../agents
+      '@erebus/core':
+        specifier: workspace:*
+        version: link:../core
+      '@erebus/db':
+        specifier: workspace:*
+        version: link:../db
+      drizzle-orm:
+        specifier: ^0.38.3
+        version: 0.38.4(@types/pg@8.20.0)(@types/react@19.2.17)(pg@8.21.0)(react@19.2.7)
     devDependencies:
       tsx:
         specifier: ^4.19.2

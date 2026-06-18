@@ -15,6 +15,27 @@
       "when": 1781742304494,
       "tag": "0001_bumpy_sentinels",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1781749058865,
+      "tag": "0002_thick_molly_hayes",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1781752139271,
+      "tag": "0003_lucky_spyke",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1781753411511,
+      "tag": "0004_cheerful_quicksilver",
+      "breakpoints": true
     }
   ]
 }

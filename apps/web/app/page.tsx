@@ -9,6 +9,8 @@ import {
   fetchAutonomous,
   setAutonomous,
   roam,
+  fetchContinuousRoam,
+  setContinuousRoam,
   type AutonomousState,
 } from "@/lib/api";
 import { ForecastTree } from "@/components/ForecastTree";
@@ -55,6 +57,9 @@ export default function ExplorerPage() {
   const [autoBusy, setAutoBusy] = useState(false);
   const [roaming, setRoaming] = useState(false);
   const [roamNote, setRoamNote] = useState<string | null>(null);
+  // continuous roam: worker branches back-to-back while on
+  const [continuous, setContinuous] = useState(false);
+  const [contBusy, setContBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -73,6 +78,12 @@ export default function ExplorerPage() {
     } catch {
       /* offline-safe: leave previous state */
     }
+    try {
+      const c = await fetchContinuousRoam();
+      setContinuous(Boolean(c?.continuous));
+    } catch {
+      /* offline-safe */
+    }
   }, []);
 
   useEffect(() => {
@@ -85,6 +96,19 @@ export default function ExplorerPage() {
     return () => clearInterval(id);
   }, [load, loadAuto]);
 
+  // deep-link support: /?focus=<root>&node=<id> from the Made/Market tabs
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const p = new URLSearchParams(window.location.search);
+    const focus = p.get("focus");
+    const node = p.get("node");
+    if (focus) setFocusRoot(focus);
+    if (node) {
+      setPrimary(node);
+      setSelectedIds([node]);
+    }
+  }, []);
+
   const toggleAuto = async () => {
     const next = !(auto?.enabled ?? false);
     setAutoBusy(true);
@@ -96,6 +120,25 @@ export default function ExplorerPage() {
       /* offline-safe */
     } finally {
       setAutoBusy(false);
+    }
+  };
+
+  const toggleContinuous = async () => {
+    const next = !continuous;
+    setContBusy(true);
+    setContinuous(next); // optimistic
+    try {
+      const r = await setContinuousRoam(next);
+      setContinuous(Boolean(r?.continuous));
+      setRoamNote(
+        next
+          ? "Continuous roam ON — EREBUS will branch back-to-back (budget-capped)."
+          : "Continuous roam off."
+      );
+    } catch {
+      setContinuous(!next); // revert
+    } finally {
+      setContBusy(false);
     }
   };
 
@@ -372,6 +415,41 @@ export default function ExplorerPage() {
             >
               {roaming ? "Roaming…" : "Roam once ▸"}
             </button>
+
+            {/* continuous roam: keep branching back-to-back */}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={continuous}
+              disabled={contBusy}
+              onClick={toggleContinuous}
+              className="group flex items-center gap-2 disabled:opacity-50"
+              title={
+                continuous
+                  ? "EREBUS is roaming continuously (budget-capped)"
+                  : "Roam continuously instead of one step at a time"
+              }
+            >
+              <span
+                className="relative inline-flex h-5 w-9 items-center rounded-full transition-colors"
+                style={{ background: continuous ? "var(--nx-green)" : "var(--nx-border-strong)" }}
+              >
+                <span
+                  className="inline-block h-4 w-4 rounded-full bg-white transition-transform"
+                  style={{ transform: continuous ? "translateX(18px)" : "translateX(2px)" }}
+                />
+              </span>
+              <span className="nx-label" style={{ color: continuous ? "var(--nx-green)" : undefined }}>
+                Continuous · {contBusy ? "…" : continuous ? "ON" : "OFF"}
+              </span>
+            </button>
+
+            {continuous && (
+              <span className="nx-chip nx-green-glow" style={{ color: "var(--nx-green)", borderColor: "var(--nx-green)" }}>
+                <span className="nx-dot" style={{ background: "var(--nx-green)" }} />
+                branching live
+              </span>
+            )}
 
             {roamNote && (
               <span className="text-[11px] text-nx-text-secondary">{roamNote}</span>

@@ -11,7 +11,10 @@ import {
   synthesize,
   fetchDirections,
   pursueDirection,
+  gameRead,
   type Direction,
+  type GameReadRow,
+  type RelationshipRow,
 } from "@/lib/api";
 
 // Angle accent colors for the four tailored directions.
@@ -70,6 +73,8 @@ interface NodeDetailData {
   shadowReads?: ShadowRead[];
   events?: EventRow[];
   provenance?: EventRow[];
+  game_read?: GameReadRow | null;
+  relationships?: { from?: RelationshipRow[]; to?: RelationshipRow[] };
 }
 
 interface Props {
@@ -81,7 +86,7 @@ interface Props {
   onPursued?: (id: string) => void;
 }
 
-type Busy = null | "expand" | "debate" | "shadow" | "synthesize";
+type Busy = null | "expand" | "debate" | "shadow" | "synthesize" | "game";
 
 export function NodeDetail({ nodeId, selectedIds, onRefresh, onClearSelection, onPursued }: Props) {
   const [data, setData] = useState<NodeDetailData | null>(null);
@@ -205,6 +210,11 @@ export function NodeDetail({ nodeId, selectedIds, onRefresh, onClearSelection, o
   const debates = data?.debates ?? [];
   const shadow = data?.shadowRead ?? data?.shadowReads?.[0] ?? null;
   const events = data?.events ?? data?.provenance ?? [];
+  const game = data?.game_read ?? null;
+  const rels: Array<RelationshipRow & { dir: "out" | "in" }> = [
+    ...(data?.relationships?.from ?? []).map((r) => ({ ...r, dir: "out" as const })),
+    ...(data?.relationships?.to ?? []).map((r) => ({ ...r, dir: "in" as const })),
+  ];
   const multi = selectedIds.length >= 2;
 
   return (
@@ -232,6 +242,14 @@ export function NodeDetail({ nodeId, selectedIds, onRefresh, onClearSelection, o
             onClick={() => run("shadow", () => shadowNode(nodeId), "Shadow read")}
           >
             {busy === "shadow" ? "Reading…" : "Shadow"}
+          </button>
+          <button
+            className="nx-btn"
+            disabled={busy !== null}
+            onClick={() => run("game", () => gameRead(nodeId), "Game read")}
+            title="Game-theory read: players, equilibrium, stability + the decision"
+          >
+            {busy === "game" ? "Reading…" : "Game read"}
           </button>
           {multi && (
             <button
@@ -414,6 +432,9 @@ export function NodeDetail({ nodeId, selectedIds, onRefresh, onClearSelection, o
               </div>
             </Section>
 
+            {/* GAME READ — strategic depth: players, equilibrium, stability, decision */}
+            <GameReadPanel game={game} />
+
             {node.rationale && (
               <Section label="Rationale">
                 <p className="text-sm leading-relaxed text-nx-text-secondary">{node.rationale}</p>
@@ -548,6 +569,29 @@ export function NodeDetail({ nodeId, selectedIds, onRefresh, onClearSelection, o
               )}
             </Section>
 
+            {/* strategic relationship graph */}
+            <Section label={`Strategic links (${rels.length})`}>
+              {rels.length ? (
+                <ul className="space-y-1.5">
+                  {rels.map((r, i) => (
+                    <li key={r.id ?? i} className="nx-card-elevated p-2.5">
+                      <div className="flex items-center gap-2 text-[11px]">
+                        <RelTag type={r.type} />
+                        <span className="nx-mono text-nx-text-muted">
+                          {r.dir === "out" ? `→ ${r.toNode ?? "?"}` : `← ${r.fromNode ?? "?"}`}
+                        </span>
+                      </div>
+                      {r.rationale && (
+                        <p className="mt-1 text-[11px] leading-snug text-nx-text-secondary">{r.rationale}</p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <Empty>no strategic links yet — a shadow read or game read can draw them</Empty>
+              )}
+            </Section>
+
             {/* provenance chain */}
             <Section label={`Provenance — why this branch is where it is (${events.length})`}>
               {events.length ? (
@@ -605,6 +649,130 @@ function Field({ k, v }: { k: string; v?: string | null }) {
       <span className="nx-label">{k}</span>
       <p className="text-[12px] leading-snug text-nx-text-secondary">{v}</p>
     </div>
+  );
+}
+
+function RelTag({ type }: { type?: string | null }) {
+  const t = type ?? "link";
+  const red = ["contradicts", "tension", "deters"].includes(t);
+  const cls = red ? "nx-chip-red" : t === "supports" || t === "validates" ? "nx-chip-green" : "nx-chip-indigo";
+  return <span className={`nx-chip ${cls}`}>{t.replace(/_/g, " ")}</span>;
+}
+
+function GameReadPanel({ game }: { game?: GameReadRow | null }) {
+  if (!game) {
+    return (
+      <Section label="Game read — the strategic equilibrium">
+        <Empty>no game read yet — run one to model players, payoffs, the equilibrium & its stability</Empty>
+      </Section>
+    );
+  }
+  const stability = typeof game.stability === "number" ? game.stability : 0.5;
+  const fragile = stability < 0.35;
+  const stColor = stability >= 0.66 ? "var(--nx-green)" : fragile ? "#a855f7" : "var(--nx-amber)";
+  const players = Array.isArray(game.players) ? game.players : [];
+  const moves = Array.isArray(game.leverageMoves) ? game.leverageMoves : [];
+  return (
+    <Section label="Game read — the strategic equilibrium">
+      <div className="nx-card-elevated space-y-3 border-l-2 p-3" style={{ borderLeftColor: stColor }}>
+        {/* equilibrium headline */}
+        <div className="flex flex-wrap items-center gap-2">
+          {game.equilibriumType && (
+            <span className="nx-chip nx-chip-indigo">{game.equilibriumType.replace(/_/g, " ")}</span>
+          )}
+          {game.gameType && <span className="nx-badge">{game.gameType.replace(/_/g, " ")}</span>}
+          <span
+            className="nx-chip"
+            style={{
+              color: game.outcomeIsEquilibrium ? "var(--nx-green)" : "var(--nx-red)",
+              borderColor: game.outcomeIsEquilibrium ? "var(--nx-green)" : "var(--nx-red)",
+            }}
+          >
+            {game.outcomeIsEquilibrium ? "outcome IS the equilibrium" : "outcome is NOT the equilibrium"}
+          </span>
+        </div>
+        {game.predictedEquilibrium && (
+          <p className="text-[12px] leading-snug text-nx-text-secondary">{game.predictedEquilibrium}</p>
+        )}
+
+        {/* stability axis */}
+        <div>
+          <div className="mb-1 flex items-center justify-between text-[11px]">
+            <span className="nx-label">Equilibrium stability</span>
+            <span className="nx-mono" style={{ color: stColor }}>
+              {stability.toFixed(2)} {fragile ? "· FRAGILE ⚡" : stability >= 0.66 ? "· robust" : "· contested"}
+            </span>
+          </div>
+          <div className="h-2 w-full overflow-hidden rounded-full bg-nx-bg-primary">
+            <div className="h-full rounded-full" style={{ width: `${stability * 100}%`, background: stColor }} />
+          </div>
+          {game.fragilityDrivers?.length ? (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {game.fragilityDrivers.map((f, i) => (
+                <span key={i} className="nx-chip" style={{ color: "#a855f7", borderColor: "#a855f7" }}>
+                  {f}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        {/* players */}
+        {players.length ? (
+          <div>
+            <div className="nx-label mb-1">Players</div>
+            <ul className="space-y-1.5">
+              {players.map((p, i) => (
+                <li key={i} className="rounded-md border border-nx-border p-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[12px] font-semibold text-nx-text-primary">{p.name}</span>
+                    {p.type && <span className="nx-badge">{p.type}</span>}
+                    {p.patience && <span className="nx-mono text-[10px] text-nx-text-muted">patience {p.patience}</span>}
+                  </div>
+                  {p.dominantStrategy && (
+                    <p className="text-[11px] leading-snug text-nx-text-secondary">▸ {p.dominantStrategy}</p>
+                  )}
+                  {p.batna && <p className="text-[10px] text-nx-text-muted">BATNA: {p.batna}</p>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        {/* decision layer */}
+        {(game.focalPoint || moves.length || game.noRegretAction || game.reversalTripwire) && (
+          <div className="rounded-lg border border-nx-indigo/40 bg-[rgba(99,102,241,0.06)] p-2.5">
+            <div className="nx-label mb-1 text-nx-indigo">Decision</div>
+            <Field k="Focal point" v={game.focalPoint} />
+            {moves.length ? (
+              <div className="mt-1">
+                <span className="nx-label">Leverage moves</span>
+                <ul className="mt-1 space-y-1">
+                  {moves.map((m, i) => (
+                    <li key={i} className="text-[11px] leading-snug text-nx-text-secondary">
+                      <span className="font-semibold text-nx-text-primary">{m.actor}</span>: {m.move}
+                      {m.mechanism && <span className="nx-mono text-[10px] text-nx-text-muted"> [{m.mechanism}]</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {game.noRegretAction && (
+              <div className="mt-1.5 rounded-md p-2" style={{ background: "rgba(34,197,94,0.08)" }}>
+                <span className="nx-label" style={{ color: "var(--nx-green)" }}>No-regret action</span>
+                <p className="text-[12px] leading-snug text-nx-text-primary">{game.noRegretAction}</p>
+              </div>
+            )}
+            {game.reversalTripwire && (
+              <div className="mt-1.5 rounded-md p-2" style={{ background: "rgba(239,68,68,0.08)" }}>
+                <span className="nx-label" style={{ color: "var(--nx-red)" }}>Reversal tripwire</span>
+                <p className="text-[12px] leading-snug text-nx-text-primary">{game.reversalTripwire}</p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </Section>
   );
 }
 

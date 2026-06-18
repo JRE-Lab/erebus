@@ -13,11 +13,13 @@
 // ============================================================================
 import { sql, desc } from "drizzle-orm";
 import { db, nodes, worldviewSnapshots, recordEvent, getSetting, isPaused } from "@erebus/db";
-import { listNodes, calibrationScore } from "@erebus/core";
-import { ingestAll, rematchRecent } from "@erebus/ingest";
+import { listNodes, calibrationScore, roamOnce } from "@erebus/core";
+import { ingestAll, rematchRecent, matchNode } from "@erebus/ingest";
 import { runGardener } from "@erebus/gardener";
+import { mapUnmappedTheories, refreshMarket } from "@erebus/market";
 import { llmLive, call, OPUS } from "@erebus/agents";
 import { runCycle } from "./cycle.js";
+import { withinDailyBudget } from "./governors.js";
 import { whatChanged } from "./digest.js";
 
 const MIN = 60_000;
@@ -130,9 +132,10 @@ export function startScheduler(): SchedulerHandle {
   const cycleEvery = minutes("CYCLE_EVERY_MIN", 15);
   const gardenEvery = minutes("GARDEN_EVERY_MIN", 360);
   const worldviewEvery = minutes("WORLDVIEW_EVERY_MIN", 720);
+  const marketEvery = minutes("MARKET_EVERY_MIN", 360);
 
   console.log(
-    `[scheduler] starting — ingest/${ingestEvery}m, rematch/${rematchEvery}m, cycle/${cycleEvery}m, garden/${gardenEvery}m, worldview/${worldviewEvery}m; LLM ${llmLive() ? "live" : "offline"}`
+    `[scheduler] starting — ingest/${ingestEvery}m, rematch/${rematchEvery}m, cycle/${cycleEvery}m, garden/${gardenEvery}m, worldview/${worldviewEvery}m, market/${marketEvery}m; LLM ${llmLive() ? "live" : "offline"}`
   );
 
   const ingestTick = guarded("ingest", () => ingestAll());
@@ -146,6 +149,13 @@ export function startScheduler(): SchedulerHandle {
   });
   const gardenTick = guarded("garden", () => runGardener());
   const wvTick = guarded("worldview", () => worldviewTick());
+  // Market correlation: map any unmapped theories, then turn significant moves
+  // into greening/contradicting evidence. Pause-aware via guarded().
+  const marketTick = guarded("market", async () => {
+    const m = await mapUnmappedTheories(12);
+    const r = await refreshMarket();
+    return { mapped: m.mapped, newLinks: m.created, ...r };
+  });
 
   const timers: NodeJS.Timeout[] = [
     setInterval(ingestTick, ingestEvery * MIN),
@@ -153,16 +163,58 @@ export function startScheduler(): SchedulerHandle {
     setInterval(cycleTick, cycleEvery * MIN),
     setInterval(gardenTick, gardenEvery * MIN),
     setInterval(wvTick, worldviewEvery * MIN),
+    setInterval(marketTick, marketEvery * MIN),
   ];
+
+  // --- continuous roam: branch back-to-back while enabled --------------------
+  // Self-rescheduling loop (not a fixed interval) so EREBUS keeps roaming as
+  // fast as the budget allows when settings.roam_continuous.on is set. Fully
+  // governed: pause stops it, the autonomous toggle gates it, the daily budget
+  // caps it (then it backs off until the UTC day rolls), and every new branch
+  // is greened against existing signals.
+  let stopped = false;
+  let roamTimer: NodeJS.Timeout | null = null;
+  const scheduleRoam = (ms: number) => {
+    if (!stopped) roamTimer = setTimeout(roamLoop, ms);
+  };
+  const roamLoop = async () => {
+    try {
+      if (await isPaused()) return scheduleRoam(15_000);
+      const cont = await getSetting<{ on: boolean }>("roam_continuous", { on: false });
+      if (!cont.on) return scheduleRoam(8_000);
+      const a = await getSetting<{ enabled: boolean }>("autonomous", { enabled: true });
+      if (!a.enabled) return scheduleRoam(8_000);
+      if (!(await withinDailyBudget())) return scheduleRoam(120_000); // budget hit — back off
+      const r = await roamOnce();
+      for (const id of r.childIds) {
+        try {
+          await matchNode(id);
+        } catch {
+          /* greening best-effort */
+        }
+      }
+      console.log(`[scheduler] roam ${r.status}${r.nodeId ? ` ${r.nodeId}` : ""} -> ${r.expanded} children`);
+      // fast cadence when productive, slower when idle/blocked
+      scheduleRoam(r.status === "expanded" ? 2_000 : 12_000);
+    } catch (e) {
+      console.warn("[scheduler] continuous roam error:", (e as Error).message);
+      scheduleRoam(12_000);
+    }
+  };
 
   // Stagger an initial ingest ~20s after start so the first cycle has signals.
   const kickoff = setTimeout(() => {
     void ingestTick();
   }, 20_000);
+  const marketKickoff = setTimeout(() => void marketTick(), 45_000);
+  scheduleRoam(25_000);
 
   const stop = () => {
+    stopped = true;
     for (const t of timers) clearInterval(t);
     clearTimeout(kickoff);
+    clearTimeout(marketKickoff);
+    if (roamTimer) clearTimeout(roamTimer);
     console.log("[scheduler] stopped");
   };
 

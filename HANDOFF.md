@@ -1,0 +1,100 @@
+# EREBUS — Project Handoff
+
+A forward-branching **forecast tree that greens as reality confirms it**, plus a
+content profit engine and a strategic (game-theory) decision layer. Each node is
+a forecast (question + not-yet-happened outcome + indicators + falsifiers +
+horizon). Incoming news + market signals are matched to indicators and "green
+up" branches (`speculative → corroborating → corroborated`, or `contradicted`);
+corroborated nodes become launch points to branch further or to turn into
+content.
+
+---
+
+## 1. Where it lives
+
+- **Code:** `C:\Users\jrell\OneDrive\Desktop\JRE-Lab\erebus` (git branch `forecast-engine`; remote `github.com/JRE-Lab/erebus`).
+- **Production:** VPS `root@159.203.86.148`, dir `/opt/erebus`, `docker compose -f docker-compose.prod.yml`.
+- **Dashboard:** http://159.203.86.148:4000 — Basic-auth `erebus` / `imitate` (`EREBUS_USER`/`EREBUS_PASS` in `/opt/erebus/.env`).
+- **Ports** (isolated from the BTC dashboard on 3000/5050): **4000** web+API, **5433** Postgres, **6380** Redis.
+
+---
+
+## 2. Architecture
+
+- **Monorepo:** pnpm + Turborepo. TypeScript everywhere, source-only packages (run via `tsx`).
+- **DB:** Postgres 16 + pgvector (VECTOR 1536). Drizzle ORM. Migrations in `packages/db/drizzle` applied by `pnpm --filter @erebus/db migrate` (NOT automatic at boot — run on deploy).
+- **API:** Hono mounted **inside Next 15** at `/api` (`apps/web/app/api/[[...route]]/route.ts`) — one web container serves UI + API.
+- **Worker:** `apps/worker` — autonomous scheduler (`src/scheduler.ts`) running ingest/rematch/cycle/garden/worldview/market on timers + the continuous-roam loop.
+- **LLM:** multi-provider (`packages/agents/src/client.ts`). `LLM_PROVIDER=auto` → **Anthropic first** (Opus `claude-opus-4-8`, Sonnet `claude-sonnet-4-6`), falls back to **OpenAI** (`gpt-4o`/`gpt-4o-mini`) on any error. Every call is pause-guarded and cost-logged to `exploration_jobs`.
+- **Embeddings:** `EMBEDDING_PROVIDER=openai` on the VPS (`text-embedding-3-small`, 1536); deterministic offline fallback exists.
+
+### Packages
+`db` (schema/migrate/settings/embeddings/vector) · `agents` (LLM client + prompts + debate) · `core` (tree ops, greening state machine, autonomy/roam, scoring) · `ingest` (RSS + signal↔node matching) · `market` (correlation) · `gametheory` (strategic layer) · `shadowboard` (deception) · `gardener` (prune/merge) · `evals` · `content` (profit engine). Apps: `web`, `worker`.
+
+---
+
+## 3. Features
+
+### Forecast tree + greening
+News/market signals are embedded, matched to the nearest nodes, and a Sonnet judge labels confirm/refute/neutral; `applyMatch` moves a confirmation scalar that drives state. Autonomously-roamed/expanded branches are now greened against existing signals immediately (in the cycle, `/roam`, `/nodes/:id/expand`, and the continuous loop) — previously they greened only by chance.
+
+### Autonomy & Continuous roam
+- **Autonomous toggle** (`settings.autonomous`): gates the hourly `cycle` (Opus expansion, capped at `CYCLE_BUDGET_USD`).
+- **Continuous roam** (`settings.roam_continuous`, Explorer toggle): a self-rescheduling worker loop that branches back-to-back (~2s when productive) — pause-aware, gated by the autonomous toggle, capped by the daily budget. Endpoints `GET/PUT /api/roam/continuous`.
+
+### Content Studio (`/studio`) — profit engine
+Per corroborated node: **script + storyboard** (Anthropic) → **images** (OpenAI `gpt-image-1`, 1024×1536 — NOT dall-e-3, which the project key rejects) → **voice** (ElevenLabs, optional) → **video** (ffmpeg, 1080×1920 MP4). Each stage independently runnable. Assets persist on the `erebus_content` volume (`CONTENT_DIR=/app/content`), streamed from `/api/content/file/:name`. ffmpeg is in the web image.
+
+### Market correlation (`/market`)
+16-instrument catalog (oil/gas/metals/indices/sector ETFs/VIX/dollar/bonds/BTC). Free no-key feeds: **Stooq primary → Yahoo fallback** (Stooq returns blank from the VPS IP, so Yahoo serves). Theories are LLM-mapped to instruments (`node_instruments`); a move ≥`MARKET_MOVE_PCT` (4%) over `MARKET_WINDOW_DAYS` (5) becomes a deterministic `source:"market"` signal that confirms (aligned) or refutes (opposed) — integrated greening. Worker `market` tick (6h) + `Map theories` / `Refresh + grade` buttons.
+
+### EREBUS-made theories (`/made`)
+Every `origin="erebus"` branch grouped under its root theory; cards deep-link into the Explorer via `/?focus=<root>&node=<id>`.
+
+### Game-theory depth (the strategic layer)
+`POST /api/nodes/:id/game` runs a **Game Read** (Opus): players (payoff ranking, BATNA, dominant strategy, patience), game type, predicted equilibrium + type, **equilibrium-stability [0..1]**, and "outcome IS/IS NOT the equilibrium" — plus a **Decision layer** (Sonnet): focal point, leverage moves, no-regret action, **reversal tripwire** (fed back into the node's indicators). Stored in `game_reads`; stability is denormalized onto `nodes.stability` and folds into state: a confirming-but-fragile node becomes **`tipping`** (violet) — *the real alpha*. Autonomous roam is biased toward low-stability nodes (probe the knife-edge). Shown in a Game Read panel in NodeDetail.
+
+### Shadow Board (`/shadow`)
+Deception/tradecraft read; can spawn a contested counter-forecast — now **connected into the tree** (`parentId` = source, `origin:"shadow"`, ⚡ branch label) and rendered in NodeDetail's "Strategic links".
+
+### Cost control
+- **Pause kill-switch** (`settings.paused`, header button): instant full stop on ALL paid calls (LLM + embeddings + images).
+- **Budgets** (worker only): `CYCLE_BUDGET_USD` ($2/cycle), `DAILY_BUDGET_USD` ($15/day hard cap on the autonomous loop). ⚠️ Manual/Studio actions are gated by pause only, NOT the daily cap.
+
+---
+
+## 4. Operating it
+
+- **Resume / spend:** the system runs $0 while paused. To go live: header **Pause** off, **Autonomous** on (and **Continuous** on for back-to-back roaming). The $15/day cap bounds the autonomous loop.
+- **Deploy** (from local repo):
+  1. `tar czf /tmp/erebus-deploy.tgz --exclude node_modules --exclude .next --exclude .git --exclude .env .`
+  2. `scp` to `/tmp` on the VPS, `tar xzf … -C /opt/erebus` (preserves `.env`).
+  3. `docker compose -f docker-compose.prod.yml build web worker`
+  4. `docker compose -f docker-compose.prod.yml run --rm web sh -lc 'cd /app && pnpm --filter @erebus/db migrate'`
+  5. `docker compose -f docker-compose.prod.yml up -d web worker`
+- **Backups:** nightly `pg_dump` to `/opt/erebus-backups` via cron (keep 14).
+
+### Key env vars (`/opt/erebus/.env`, chmod 600)
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (LLM + images + embeddings), `EREBUS_USER`/`EREBUS_PASS`, `POSTGRES_PASSWORD`, `EMBEDDING_PROVIDER=openai`, `LLM_PROVIDER=auto`, budgets/cadences (`*_BUDGET_USD`, `*_EVERY_MIN`), `OPENAI_IMAGE_MODEL=gpt-image-1`, `ELEVENLABS_API_KEY` (optional — voice), `MARKET_MOVE_PCT`/`MARKET_WINDOW_DAYS` (optional).
+
+---
+
+## 5. Roadmap (designed, not yet built)
+
+From the game-theory design panel + subsystem audit, in priority order:
+- **Equilibrium-break & tripwire alerts** — a live rail that fires when a corroborated node destabilizes or a decision's tripwire greens.
+- **Analysis of Competing Hypotheses (ACH)** — replace single confirm/refute with posteriors across 3–5 rival equilibria; reality *selects* among them.
+- **Bayesian/log-odds greening** — `applyMatch` as a calibrated log-likelihood update; sibling branches become a coherent distribution.
+- **Real Brier calibration** — resolve nodes against EXTERNAL ground truth (realized market move / operator adjudication); today it's self-referential.
+- **Value-of-Information ranker** — roam toward the most decision-relevant uncertainty, not the most-confirmed node.
+- **Position sizer** — fractional-Kelly read-only sizing for instrument-linked nodes (never auto-trade).
+- **Pre-mortem / red-team** as a first-class node op; **strategic edge auto-population** (best_response_to/deters) during expansion.
+- **Auto-publish** Content Studio shorts to YouTube/TikTok/IG (needs platform API keys).
+- **Visionary:** self-play equilibrium simulation, reflexivity engine, systemic graph dynamics (feedback loops/cascades), counterfactual "pin a hypothetical signal" sandbox.
+
+---
+
+## 6. Security notes
+- Never commit `.env` or keys (gitignored). Keys live only in `/opt/erebus/.env`.
+- If keys are ever pasted into chat, rotate them — chat history is compromised.
+- Dashboard is Basic-auth only (no firewall, by design).

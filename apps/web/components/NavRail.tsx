@@ -5,6 +5,8 @@ import { usePathname } from "next/navigation";
 
 const ITEMS: { href: string; label: string; glyph: string; hint: string }[] = [
   { href: "/", label: "Explorer", glyph: "◈", hint: "the forecast tree" },
+  { href: "/made", label: "Made", glyph: "✦", hint: "EREBUS-authored theories" },
+  { href: "/market", label: "Market", glyph: "₿", hint: "market & commodity correlation" },
   { href: "/shadow", label: "Shadow", glyph: "☡", hint: "deception analysis" },
   { href: "/studio", label: "Studio", glyph: "▶", hint: "content from the green" },
 ];

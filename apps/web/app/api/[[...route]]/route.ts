@@ -41,8 +41,18 @@ import {
 } from "@erebus/db";
 import { llmLive, runDebate } from "@erebus/agents";
 import { ingestAll, matchNode, rematchRecent } from "@erebus/ingest";
+import { getMarketOverview, mapUnmappedTheories, mapTheory, refreshMarket } from "@erebus/market";
+import { runGameRead, latestGameRead } from "@erebus/gametheory";
 import { runShadowRead } from "@erebus/shadowboard";
-import { nodeToContent } from "@erebus/content";
+import {
+  nodeToContent,
+  generateScript,
+  generateImages,
+  synthesizeVoice,
+  assembleVideo,
+  filePath as contentFilePath,
+} from "@erebus/content";
+import { readFile } from "node:fs/promises";
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 
 export const runtime = "nodejs";
@@ -123,6 +133,7 @@ app.get("/nodes/:id", (c) =>
       db.select().from(relationships).where(eq(relationships.fromNode, id)),
       db.select().from(relationships).where(eq(relationships.toNode, id)),
     ]);
+    const game_read = await latestGameRead(id);
 
     return c.json({
       node,
@@ -131,6 +142,7 @@ app.get("/nodes/:id", (c) =>
       shadow_reads: reads,
       events: prov,
       relationships: { from: fromRels, to: toRels },
+      game_read,
     });
   })
 );
@@ -156,9 +168,16 @@ app.post("/nodes", (c) =>
   })
 );
 
-// POST /api/nodes/:id/expand -> forward-expand (the recursion).
+// POST /api/nodes/:id/expand -> forward-expand (the recursion). New branches are
+// greened against existing signals immediately so they don't wait for chance.
 app.post("/nodes/:id/expand", (c) =>
-  guard(c, async () => c.json(await expandForward(c.req.param("id"))))
+  guard(c, async () => {
+    const r = await expandForward(c.req.param("id"));
+    for (const ch of r.children) {
+      try { await matchNode(ch.id); } catch { /* greening best-effort */ }
+    }
+    return c.json(r);
+  })
 );
 
 // GET /api/nodes/:id/directions -> suggested directions to pursue from here.
@@ -185,7 +204,33 @@ app.post("/rematch", (c) =>
 );
 
 // POST /api/roam -> one autonomous step now (EREBUS picks a node + branches it).
-app.post("/roam", (c) => guard(c, async () => c.json(await roamOnce())));
+// Greens the new branches against existing signals before returning.
+app.post("/roam", (c) =>
+  guard(c, async () => {
+    const r = await roamOnce();
+    for (const id of r.childIds) {
+      try { await matchNode(id); } catch { /* greening best-effort */ }
+    }
+    return c.json(r);
+  })
+);
+
+// GET/PUT /api/roam/continuous -> continuous-roam toggle. When on, the worker
+// branches back-to-back (budget-capped, pause-aware) instead of one-shot.
+app.get("/roam/continuous", (c) =>
+  guard(c, async () => {
+    const s = await getSetting<{ on: boolean }>("roam_continuous", { on: false });
+    return c.json({ continuous: Boolean(s.on) });
+  })
+);
+app.put("/roam/continuous", (c) =>
+  guard(c, async () => {
+    const body = await c.req.json().catch(() => ({}));
+    const on = Boolean(body?.continuous);
+    await setSetting("roam_continuous", { on });
+    return c.json({ continuous: on });
+  })
+);
 
 // GET /api/autonomous -> roam toggle + counts.
 app.get("/autonomous", (c) =>
@@ -228,6 +273,16 @@ app.post("/nodes/:id/debate", (c) =>
 // POST /api/nodes/:id/shadow -> Shadow Board deception pass.
 app.post("/nodes/:id/shadow", (c) =>
   guard(c, async () => c.json(await runShadowRead(c.req.param("id"))))
+);
+
+// POST /api/nodes/:id/game -> game-theory read + decision layer (players,
+// equilibrium, stability, focal point, leverage move, reversal tripwire).
+app.post("/nodes/:id/game", (c) =>
+  guard(c, async () => c.json(await runGameRead(c.req.param("id"))))
+);
+// GET /api/nodes/:id/game -> latest stored game read (no spend).
+app.get("/nodes/:id/game", (c) =>
+  guard(c, async () => c.json({ game_read: await latestGameRead(c.req.param("id")) }))
 );
 
 // POST /api/synthesize { ids } -> combine N branches into a new node.
@@ -320,16 +375,60 @@ app.get("/cost", (c) =>
   })
 );
 
-// POST /api/content/:id -> drive a node through the content pipeline.
-app.post("/content/:id", (c) =>
-  guard(c, async () => c.json(await nodeToContent(c.req.param("id"))))
+// --- Market correlation -----------------------------------------------------
+// GET /api/market -> catalog quotes + per-theory instrument links & verdicts.
+app.get("/market", (c) => guard(c, async () => c.json(await getMarketOverview())));
+// POST /api/market/map -> LLM-map any unmapped theories to instruments.
+app.post("/market/map", (c) =>
+  guard(c, async () => {
+    const body = await c.req.json().catch(() => ({}));
+    const nodeId = typeof body?.nodeId === "string" ? body.nodeId : "";
+    if (nodeId) return c.json(await mapTheory(nodeId));
+    return c.json(await mapUnmappedTheories(Number(body?.limit) || 20));
+  })
 );
+// POST /api/market/refresh -> pull quotes, turn significant moves into evidence.
+app.post("/market/refresh", (c) => guard(c, async () => c.json(await refreshMarket())));
 
 // GET /api/content -> all content items (newest first).
 app.get("/content", (c) =>
   guard(c, async () => {
     const rows = await db.select().from(contentItems).orderBy(desc(contentItems.createdAt));
     return c.json(rows);
+  })
+);
+
+// Content Studio pipeline — granular steps the UI drives.
+// POST /api/content/script { nodeId } -> structured script + storyboard.
+app.post("/content/script", (c) =>
+  guard(c, async () => {
+    const body = await c.req.json().catch(() => ({}));
+    const nodeId = typeof body?.nodeId === "string" ? body.nodeId : "";
+    if (!nodeId) return c.json({ error: "nodeId required" }, 400);
+    return c.json(await generateScript(nodeId));
+  })
+);
+// POST /api/content/:id/images -> generate a scene image per storyboard scene.
+app.post("/content/:id/images", (c) => guard(c, async () => c.json(await generateImages(c.req.param("id")))));
+// POST /api/content/:id/voice -> ElevenLabs narration mp3.
+app.post("/content/:id/voice", (c) => guard(c, async () => c.json(await synthesizeVoice(c.req.param("id")))));
+// POST /api/content/:id/video -> ffmpeg-assembled vertical MP4.
+app.post("/content/:id/video", (c) => guard(c, async () => c.json(await assembleVideo(c.req.param("id")))));
+// POST /api/content/:nodeId/full -> run the whole pipeline.
+app.post("/content/:nodeId/full", (c) => guard(c, async () => c.json(await nodeToContent(c.req.param("nodeId")))));
+
+// GET /api/content/file/:name -> stream a generated asset (png/mp3/mp4).
+app.get("/content/file/:name", (c) =>
+  guard(c, async () => {
+    const name = c.req.param("name").replace(/[^a-zA-Z0-9._-]/g, "");
+    try {
+      const buf = await readFile(contentFilePath(name));
+      const ext = name.split(".").pop()?.toLowerCase();
+      const type = ext === "mp4" ? "video/mp4" : ext === "mp3" ? "audio/mpeg" : ext === "png" ? "image/png" : "application/octet-stream";
+      return new Response(new Uint8Array(buf), { headers: { "content-type": type, "cache-control": "public, max-age=31536000" } });
+    } catch {
+      return c.json({ error: "not found" }, 404);
+    }
   })
 );
 

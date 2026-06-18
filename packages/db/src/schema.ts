@@ -35,6 +35,8 @@ export const nodes = pgTable(
     synthesizedFrom: text("synthesized_from").array().notNull().default([]),
     confirmation: real("confirmation").notNull().default(0), // THE GREEN LEVEL
     confidence: real("confidence").notNull().default(0.5), // internal (debate), secondary
+    stability: real("stability").notNull().default(0.5), // equilibrium stability [0..1] (game read)
+    equilibriumType: text("equilibrium_type"), // nash|subgame_perfect|mixed|focal|none
     state: text("state").notNull().default("speculative"),
     // speculative|corroborating|corroborated|contradicted|resolved_true|resolved_false|dormant|merged
     resolved: boolean("resolved"),
@@ -179,14 +181,62 @@ export const worldviewSnapshots = pgTable("worldview_snapshots", {
 export const contentItems = pgTable("content_items", {
   id: uuid("id").primaryKey().defaultRandom(),
   nodeId: text("node_id").references(() => nodes.id, { onDelete: "cascade" }),
+  title: text("title"),
   script: text("script"),
+  caption: text("caption"),
+  data: jsonb("data").notNull().default({}), // { hook, scenes:[{narration,imagePrompt,image}], ... }
   audioUrl: text("audio_url"),
   videoUrl: text("video_url"),
   platform: text("platform"),
-  status: text("status").notNull().default("draft"),
+  status: text("status").notNull().default("draft"), // draft|scripted|visualized|voiced|rendered|published
   publishedAt: timestamp("published_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+// --- game_reads: structured game-theory analysis per node -------------------
+// Players + payoffs + the predicted equilibrium + stability + the decision layer
+// (focal point, leverage move, no-regret action, reversal tripwire). The forecast
+// becomes a falsifiable CLAIM: "this outcome IS the stable equilibrium".
+export const gameReads = pgTable(
+  "game_reads",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    nodeId: text("node_id").references(() => nodes.id, { onDelete: "cascade" }),
+    players: jsonb("players").notNull().default([]), // [{name,type,payoffRanking,batna,dominantStrategy,patience}]
+    gameType: text("game_type"), // one_shot|repeated|sequential
+    predictedEquilibrium: text("predicted_equilibrium"),
+    equilibriumType: text("equilibrium_type"), // nash|subgame_perfect|mixed|focal|none
+    outcomeIsEquilibrium: boolean("outcome_is_equilibrium"),
+    stability: real("stability"), // [0..1]
+    fragilityDrivers: text("fragility_drivers").array().notNull().default([]),
+    // decision layer
+    focalPoint: text("focal_point"),
+    leverageMoves: jsonb("leverage_moves").notNull().default([]), // [{actor,move,mechanism,expectedShift,reversibility}]
+    noRegretAction: text("no_regret_action"),
+    reversalTripwire: text("reversal_tripwire"),
+    model: text("model"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ nodeIdx: index("game_reads_node_idx").on(t.nodeId) })
+);
+
+// --- node_instruments: theory <-> market instrument links (correlation) -----
+// Each row says "if this theory is TRUE, this instrument should move <expectation>".
+// Significant aligned/opposed price moves become market signals that green/contradict.
+export const nodeInstruments = pgTable(
+  "node_instruments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    nodeId: text("node_id").references(() => nodes.id, { onDelete: "cascade" }),
+    symbol: text("symbol").notNull(), // catalog symbol, e.g. "CL" "XLE" "^SPX"
+    name: text("name").notNull(), // human label, e.g. "WTI Crude Oil"
+    kind: text("kind").notNull(), // commodity|equity|index|fx|crypto
+    expectation: text("expectation").notNull().default("up"), // theory true -> up|down
+    rationale: text("rationale"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ nodeIdx: index("node_instruments_node_idx").on(t.nodeId) })
+);
 
 // --- settings: key/value app config (autonomous toggle, etc.) ---------------
 export const settings = pgTable("settings", {
@@ -207,5 +257,7 @@ export const schema = {
   gardenerActions,
   worldviewSnapshots,
   contentItems,
+  nodeInstruments,
+  gameReads,
   settings,
 };
