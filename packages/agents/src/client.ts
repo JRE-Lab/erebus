@@ -49,17 +49,6 @@ async function logSpend(type: string, model: string, i: number, o: number, c: nu
   } catch { /* non-fatal */ }
 }
 
-// Credit/auth/quota errors that should trigger fallback in auto mode.
-function isFallbackError(e: unknown): boolean {
-  const status = (e as { status?: number }).status;
-  const msg = String((e as { message?: string }).message || "").toLowerCase();
-  return (
-    status === 401 || status === 402 || status === 403 || status === 429 ||
-    msg.includes("credit") || msg.includes("quota") || msg.includes("billing") ||
-    msg.includes("insufficient") || msg.includes("rate limit")
-  );
-}
-
 async function retry<T>(fn: () => Promise<T>, tries = 2): Promise<T> {
   let last: unknown;
   for (let n = 0; n <= tries; n++) {
@@ -141,9 +130,10 @@ export async function call(prompt: string, opts: CallOpts = {}): Promise<LLMResu
       return { content: raw.content, cost: c, model: raw.model, offline: false, usage: { input: raw.input, output: raw.output } };
     } catch (e) {
       lastErr = e;
-      const more = i < order.length - 1;
-      if (more && isFallbackError(e)) {
-        console.warn(`[llm] ${provider} failed (${(e as Error).message?.slice(0, 80)}); falling back to ${order[i + 1]}`);
+      // In auto mode (another provider remains), ANY Anthropic failure after
+      // retries — no credit, auth, rate, outage — falls through to OpenAI.
+      if (i < order.length - 1) {
+        console.warn(`[llm] ${provider} failed (${(e as Error).message?.slice(0, 100)}); falling back to ${order[i + 1]}`);
         continue;
       }
       throw e;
