@@ -41,10 +41,19 @@ function asText(v: unknown): string {
   if (v == null) return "";
   if (typeof v === "string") return v.trim();
   if (typeof v === "number") return String(v);
+  if (Array.isArray(v)) {
+    for (const el of v) {
+      const t = asText(el);
+      if (t) return t;
+    }
+    return "";
+  }
   if (typeof v === "object") {
     const o = v as Record<string, unknown>;
     if (typeof o["#text"] === "string") return (o["#text"] as string).trim();
+    if (typeof o["#text"] === "number") return String(o["#text"]);
     if (typeof o["@_href"] === "string") return (o["@_href"] as string).trim();
+    if (typeof o["@_url"] === "string") return (o["@_url"] as string).trim();
   }
   return "";
 }
@@ -102,11 +111,16 @@ export function parseFeed(xml: string): ParsedItem[] {
 
   for (const it of rssItems) {
     const title = stripTags(asText(it["title"]));
-    const url = asText(it["link"]) || asText(it["guid"]);
+    const url =
+      asText(it["link"]) ||
+      asText(it["guid"]) ||
+      asText(it["atom:link"]) ||
+      asText(it["origLink"]) ||
+      asText(it["feedburner:origLink"]);
     const summary = stripTags(
       asText(it["description"]) || asText(it["content:encoded"]) || asText(it["summary"])
     );
-    const publishedAt = parseDate(it["pubDate"] ?? it["dc:date"] ?? it["published"]);
+    const publishedAt = parseDate(it["pubDate"] ?? it["dc:date"] ?? it["published"] ?? it["updated"]);
     if (title || url) items.push({ title, url, summary, publishedAt });
   }
 
@@ -152,6 +166,7 @@ export async function ingestFeed(source: FeedSource): Promise<string[]> {
   if (!xml) return [];
 
   const items = parseFeed(xml);
+  const withFields = items.filter((i) => i.title || i.url).length;
   const insertedIds: string[] = [];
 
   for (const item of items) {
@@ -171,6 +186,8 @@ export async function ingestFeed(source: FeedSource): Promise<string[]> {
 
     const v = await embed(`${title}\n${item.summary}`.trim());
     try {
+      // dedup pre-checked above; the UNIQUE(dedup_hash) constraint + catch
+      // guards the rare race. Plain insert so .returning() reliably yields id.
       const [row] = await db
         .insert(signals)
         .values({
@@ -182,7 +199,6 @@ export async function ingestFeed(source: FeedSource): Promise<string[]> {
           publishedAt: item.publishedAt,
           embedding: sql.raw(`'${toVector(v)}'::vector`),
         })
-        .onConflictDoNothing({ target: signals.dedupHash })
         .returning({ id: signals.id });
       if (row?.id) insertedIds.push(row.id);
     } catch {
@@ -190,5 +206,6 @@ export async function ingestFeed(source: FeedSource): Promise<string[]> {
     }
   }
 
+  console.log(`[ingest] ${source.name}: parsed ${items.length} (usable ${withFields}), inserted ${insertedIds.length}`);
   return insertedIds;
 }

@@ -68,7 +68,7 @@ export async function ingestAll(): Promise<IngestResult> {
   return { signals: newSignalIds.length, matches };
 }
 
-export { ingestFeed } from "./rss.js";
+export { ingestFeed, parseFeed } from "./rss.js";
 export { ingestGdelt } from "./gdelt.js";
 export { matchSignal, matchNode, rematchRecent } from "./match.js";
 export type { FeedSource } from "./rss.js";
