@@ -171,16 +171,27 @@ export async function synthesizeBranches(
   return { node: node!, cost };
 }
 
-// Suggest directions to pursue from a node (on-demand, not stored).
-export async function suggestDirections(nodeId: string): Promise<{ directions: string[]; cost: number }> {
+export interface Direction {
+  label: string;
+  angle: "consequence" | "actor" | "failure" | "wildcard" | string;
+  text: string;
+}
+
+// Suggest exactly four tailored directions to pursue from a node (on-demand).
+export async function suggestDirections(nodeId: string): Promise<{ directions: Direction[]; cost: number }> {
   const [node] = await db.select().from(nodes).where(eq(nodes.id, nodeId)).limit(1);
   if (!node) return { directions: [], cost: 0 };
-  const { data, cost } = await callJSON<{ directions: string[] }>(
-    suggestDirectionsPrompt({ question: node.question, outcome: node.outcome }),
+  const { data, cost } = await callJSON<{ directions: Direction[] }>(
+    suggestDirectionsPrompt({
+      question: node.question,
+      outcome: node.outcome,
+      rationale: node.rationale,
+      domains: node.domains,
+    }),
     { directions: [] },
-    { tier: "sonnet", agent: "suggest-directions", targetNode: nodeId, maxTokens: 800 }
+    { tier: "sonnet", agent: "suggest-directions", targetNode: nodeId, maxTokens: 900 }
   );
-  return { directions: data.directions ?? [], cost };
+  return { directions: (data.directions ?? []).slice(0, 4), cost };
 }
 
 // Pursue a direction or the operator's own response: game-theoretic analysis ->

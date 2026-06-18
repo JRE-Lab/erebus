@@ -11,7 +11,16 @@ import {
   synthesize,
   fetchDirections,
   pursueDirection,
+  type Direction,
 } from "@/lib/api";
+
+// Angle accent colors for the four tailored directions.
+const ANGLE: Record<string, { name: string; color: string }> = {
+  consequence: { name: "Consequence", color: "#6366f1" },
+  actor: { name: "Actor response", color: "#06b6d4" },
+  failure: { name: "Failure mode", color: "#ef4444" },
+  wildcard: { name: "Wildcard", color: "#f59e0b" },
+};
 
 // ----------------------------------------------------------------------------
 // Defensive shapes for the enriched fetchNode() payload. The api layer owns the
@@ -81,7 +90,7 @@ export function NodeDetail({ nodeId, selectedIds, onRefresh, onClearSelection, o
   const [note, setNote] = useState<string | null>(null);
 
   // --- interactive recursion: suggested directions + pursue ---------------
-  const [directions, setDirections] = useState<string[]>([]);
+  const [directions, setDirections] = useState<Direction[]>([]);
   const [dirLoading, setDirLoading] = useState(false);
   const [dirText, setDirText] = useState("");
   const [pursuing, setPursuing] = useState(false);
@@ -296,29 +305,44 @@ export function NodeDetail({ nodeId, selectedIds, onRefresh, onClearSelection, o
                 </button>
               </div>
 
-              {/* suggested direction chips */}
+              {/* four tailored directions — click one to pursue it ▸ */}
               {dirLoading && directions.length === 0 ? (
                 <div className="flex items-center gap-2 text-xs text-nx-text-muted">
-                  <Spinner /> finding game-theoretic branches…
+                  <Spinner /> tailoring four directions to this branch…
                 </div>
               ) : directions.length ? (
-                <div className="mb-3 flex flex-wrap gap-1.5">
-                  {directions.map((d, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      className="nx-chip nx-chip-indigo max-w-full text-left transition-colors hover:border-nx-indigo hover:bg-[rgba(99,102,241,0.16)] disabled:opacity-50"
-                      disabled={pursuing}
-                      onClick={() => setDirText(d)}
-                      title="Click to load into the box, then Pursue ▸"
-                    >
-                      <span className="line-clamp-2">{d}</span>
-                    </button>
-                  ))}
+                <div className="mb-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                  {directions.map((d, i) => {
+                    const ac = ANGLE[d.angle] ?? ANGLE.consequence!;
+                    return (
+                      <button
+                        key={i}
+                        type="button"
+                        disabled={pursuing}
+                        onClick={() => pursue(d.text)}
+                        title="Pursue this direction ▸"
+                        className="group rounded-lg border p-2.5 text-left transition-colors hover:bg-[rgba(255,255,255,0.03)] disabled:opacity-50"
+                        style={{ borderColor: "var(--nx-border)", background: "var(--nx-bg-primary)" }}
+                      >
+                        <div className="mb-1 flex items-center gap-1.5">
+                          <span className="nx-dot" style={{ background: ac.color }} />
+                          <span
+                            className="text-[10px] font-bold uppercase tracking-wide"
+                            style={{ color: ac.color }}
+                          >
+                            {d.label || ac.name}
+                          </span>
+                        </div>
+                        <p className="text-[12px] leading-snug text-nx-text-secondary group-hover:text-nx-text-primary">
+                          {d.text}
+                        </p>
+                      </button>
+                    );
+                  })}
                 </div>
               ) : (
                 <p className="mb-3 text-xs italic text-nx-text-muted">
-                  no suggestions yet — write your own direction below
+                  no directions yet — write your own below
                 </p>
               )}
 
@@ -326,7 +350,7 @@ export function NodeDetail({ nodeId, selectedIds, onRefresh, onClearSelection, o
               <div className="nx-label mb-1.5">Your direction or response</div>
               <textarea
                 className="nx-input min-h-[68px] resize-y text-sm"
-                placeholder="Pick a chip above, or write your own reasoning — EREBUS will game-theory it into the next branch."
+                placeholder="Pick a direction above, or write your own reasoning — EREBUS will game-theory it into the next branch."
                 value={dirText}
                 disabled={pursuing}
                 onChange={(e) => setDirText(e.target.value)}

@@ -106,16 +106,33 @@ Return JSON: { "effect": "confirm|refute|neutral", "weight": 0.0, "rationale": "
 }
 
 // --- Suggested directions to pursue from a node -----------------------------
-export function suggestDirectionsPrompt(node: { question: string; outcome: string }): string {
+// Exactly FOUR tailored directions, each a distinct investigative angle on this
+// specific branch — the operator picks one to recurse, or writes their own.
+export function suggestDirectionsPrompt(node: {
+  question: string;
+  outcome: string;
+  rationale?: string | null;
+  domains?: string[];
+}): string {
   return `${PERSONA}
 
-A forecast node:
+A forecast node to investigate further:
 QUESTION: ${node.question}
 OUTCOME: ${node.outcome}
+${node.rationale ? `RATIONALE: ${node.rationale}` : ""}
+${node.domains?.length ? `DOMAINS: ${node.domains.join(", ")}` : ""}
 
-Propose 5 distinct, sharp DIRECTIONS to pursue from here — each a different branch of decision/logic worth exploring forward (consequences, actor responses, second-order effects, failure modes, wildcards). Keep each to one probing sentence.
+Propose EXACTLY FOUR distinct directions to pursue from THIS branch — each specifically tailored to this question/outcome, each opening a different line of investigation. Cover four different angles:
+  1. CONSEQUENCE — the most important second-order effect if this outcome holds.
+  2. ACTOR RESPONSE — how a key actor counter-moves or adapts.
+  3. FAILURE MODE — the most likely way this outcome breaks or is wrong.
+  4. WILDCARD — a non-obvious tangent that could change everything.
+Each is one sharp, concrete sentence referencing the actual specifics of this branch (not generic). Give each a 2-4 word label.
 
-Return JSON: { "directions": ["...","...","...","...","..."] }`;
+Return JSON: { "directions": [
+  { "label": "...", "angle": "consequence|actor|failure|wildcard", "text": "one probing sentence" },
+  ... exactly 4 ...
+] }`;
 }
 
 // --- Pursue a direction / the operator's own response (game-theoretic) -------

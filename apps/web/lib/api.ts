@@ -173,8 +173,14 @@ function put<T>(path: string, body?: unknown): Promise<T> {
 
 // --- interactive recursion + autonomy shapes --------------------------------
 
+export interface Direction {
+  label: string;
+  angle: "consequence" | "actor" | "failure" | "wildcard" | string;
+  text: string;
+}
+
 export interface DirectionsResponse {
-  directions: string[];
+  directions: Direction[];
   cost: number;
 }
 
