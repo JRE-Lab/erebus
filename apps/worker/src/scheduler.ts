@@ -14,7 +14,7 @@
 import { sql, desc } from "drizzle-orm";
 import { db, nodes, worldviewSnapshots, recordEvent, getSetting } from "@erebus/db";
 import { listNodes, calibrationScore } from "@erebus/core";
-import { ingestAll } from "@erebus/ingest";
+import { ingestAll, rematchRecent } from "@erebus/ingest";
 import { runGardener } from "@erebus/gardener";
 import { llmLive, call, OPUS } from "@erebus/agents";
 import { runCycle } from "./cycle.js";
@@ -121,15 +121,18 @@ export interface SchedulerHandle {
 
 export function startScheduler(): SchedulerHandle {
   const ingestEvery = minutes("INGEST_EVERY_MIN", 30);
+  const rematchEvery = minutes("REMATCH_EVERY_MIN", 45);
   const cycleEvery = minutes("CYCLE_EVERY_MIN", 15);
   const gardenEvery = minutes("GARDEN_EVERY_MIN", 360);
   const worldviewEvery = minutes("WORLDVIEW_EVERY_MIN", 720);
 
   console.log(
-    `[scheduler] starting — ingest/${ingestEvery}m, cycle/${cycleEvery}m, garden/${gardenEvery}m, worldview/${worldviewEvery}m; LLM ${llmLive() ? "live" : "offline"}`
+    `[scheduler] starting — ingest/${ingestEvery}m, rematch/${rematchEvery}m, cycle/${cycleEvery}m, garden/${gardenEvery}m, worldview/${worldviewEvery}m; LLM ${llmLive() ? "live" : "offline"}`
   );
 
   const ingestTick = guarded("ingest", () => ingestAll());
+  // Re-judge recent signals against the current tree (greens new branches).
+  const rematchTick = guarded("rematch", () => rematchRecent(60));
   // Autonomous roaming respects the UI toggle (settings.autonomous, default on).
   const cycleTick = guarded("cycle", async () => {
     const a = await getSetting<{ enabled: boolean }>("autonomous", { enabled: true });
@@ -141,6 +144,7 @@ export function startScheduler(): SchedulerHandle {
 
   const timers: NodeJS.Timeout[] = [
     setInterval(ingestTick, ingestEvery * MIN),
+    setInterval(rematchTick, rematchEvery * MIN),
     setInterval(cycleTick, cycleEvery * MIN),
     setInterval(gardenTick, gardenEvery * MIN),
     setInterval(wvTick, worldviewEvery * MIN),

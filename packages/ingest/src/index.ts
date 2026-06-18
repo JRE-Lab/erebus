@@ -4,6 +4,7 @@
 // the tree. Fully offline-safe: no feeds + no LLM key => {signals:0, matches:0}.
 // ============================================================================
 import { ingestFeed, type FeedSource } from "./rss.js";
+import { ingestGdelt } from "./gdelt.js";
 import { matchSignal } from "./match.js";
 
 // Parse NEWS_SOURCES (comma-separated feed URLs) into sources, naming each by
@@ -45,6 +46,15 @@ export async function ingestAll(): Promise<IngestResult> {
     }
   }
 
+  // GDELT (free, no key) — broad geopolitical/energy/markets pull, when enabled.
+  if ((process.env.GDELT_ENABLED ?? "true") !== "false") {
+    try {
+      newSignalIds.push(...(await ingestGdelt()));
+    } catch {
+      // GDELT outages never kill the pull.
+    }
+  }
+
   let matches = 0;
   for (const signalId of newSignalIds) {
     try {
@@ -58,6 +68,8 @@ export async function ingestAll(): Promise<IngestResult> {
   return { signals: newSignalIds.length, matches };
 }
 
-export { ingestFeed, matchSignal };
+export { ingestFeed } from "./rss.js";
+export { ingestGdelt } from "./gdelt.js";
+export { matchSignal, matchNode, rematchRecent } from "./match.js";
 export type { FeedSource } from "./rss.js";
 export type { MatchRecord } from "./match.js";

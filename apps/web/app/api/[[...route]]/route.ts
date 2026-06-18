@@ -38,7 +38,7 @@ import {
   setSetting,
 } from "@erebus/db";
 import { llmLive, runDebate } from "@erebus/agents";
-import { ingestAll } from "@erebus/ingest";
+import { ingestAll, matchNode, rematchRecent } from "@erebus/ingest";
 import { runShadowRead } from "@erebus/shadowboard";
 import { nodeToContent } from "@erebus/content";
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
@@ -135,7 +135,9 @@ app.post("/nodes", (c) =>
     const body = await c.req.json().catch(() => ({}));
     const context = typeof body?.context === "string" ? body.context : "";
     if (!context.trim()) return c.json({ error: "context required" }, 400);
-    return c.json(await createForecast(context));
+    const r = await createForecast(context);
+    if (r.node?.id) { try { await matchNode(r.node.id); } catch { /* greening best-effort */ } }
+    return c.json(r);
   })
 );
 
@@ -156,8 +158,15 @@ app.post("/nodes/:id/pursue", (c) =>
     const body = await c.req.json().catch(() => ({}));
     const direction = typeof body?.direction === "string" ? body.direction.trim() : "";
     if (!direction) return c.json({ error: "direction required" }, 400);
-    return c.json(await pursueDirection(c.req.param("id"), direction));
+    const r = await pursueDirection(c.req.param("id"), direction);
+    if (r.node?.id) { try { await matchNode(r.node.id); } catch { /* greening best-effort */ } }
+    return c.json(r);
   })
+);
+
+// POST /api/rematch?limit= -> re-judge recent signals against current nodes.
+app.post("/rematch", (c) =>
+  guard(c, async () => c.json(await rematchRecent(Number(c.req.query("limit")) || 60)))
 );
 
 // POST /api/roam -> one autonomous step now (EREBUS picks a node + branches it).

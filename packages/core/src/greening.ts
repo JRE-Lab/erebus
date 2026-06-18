@@ -32,7 +32,9 @@ export async function applyMatch(
   const delta = effect === "confirm" ? weight : effect === "refute" ? -weight : 0;
   if (delta === 0) return { confirmation: node.confirmation, state: node.state as NodeState };
 
-  const confirmation = Math.max(-1, Math.min(1, node.confirmation + delta * 0.34));
+  // Each strong (weight~1) match moves confirmation ~0.4; ~2 cross into
+  // corroborating, ~4 reach corroborated. Volume of matches is the main driver.
+  const confirmation = Math.max(-1, Math.min(1, node.confirmation + delta * 0.4));
   const state = stateFromConfirmation(confirmation, node.resolved, node.brier);
   const isLaunch = state === "corroborated";
 
