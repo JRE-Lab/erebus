@@ -5,7 +5,6 @@
 import { eq, desc } from "drizzle-orm";
 import { db, nodes, signalMatches, signals } from "@erebus/db";
 import { callJSON, achPrompt, OPUS } from "@erebus/agents";
-import { setProbability } from "./greening.js";
 
 export interface Hypothesis {
   label: string;
@@ -81,10 +80,11 @@ export async function runACH(nodeId: string): Promise<AchResult | null> {
   for (let i = 1; i < hypotheses.length; i++) if (hypotheses[i]!.probability > hypotheses[leaderIdx]!.probability) leaderIdx = i;
   const leaderIsOutcome = leaderIdx === idx;
 
-  // Persist the distribution; fold the outcome's mass into the node's probability
-  // (only when live, so an offline fallback never rewrites the greening state).
+  // Persist the distribution as a NON-DESTRUCTIVE analytical overlay. We do NOT
+  // overwrite the node's signal-accumulated probability — a one-shot ACH read
+  // must not wipe out evidence-driven greening. (Future: let the matcher update
+  // these hypothesis posteriors directly so reality SELECTS among them.)
   await db.update(nodes).set({ hypotheses: hypotheses as object, updatedAt: new Date() }).where(eq(nodes.id, nodeId));
-  if (!offline) await setProbability(nodeId, outcomeProbability);
 
   return { hypotheses, outcomeProbability, leaderIsOutcome, note: data.note ?? "", cost, offline };
 }
