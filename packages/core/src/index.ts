@@ -3,5 +3,7 @@ export { createForecast, expandForward, synthesizeBranches, suggestDirections, p
 export type { Direction } from "./tree.js";
 export { selectNext, roamOnce } from "./autonomy.js";
 export type { RoamResult } from "./autonomy.js";
-export { stateFromConfirmation, applyMatch, applyStability, THRESH, FRAGILE_BELOW } from "./greening.js";
-export { resolveDueNodes, calibrationScore } from "./scoring.js";
+export { stateFromConfirmation, applyMatch, applyStability, setProbability, THRESH, FRAGILE_BELOW } from "./greening.js";
+export { resolveDueNodes, adjudicate, calibrationScore, calibrationStats } from "./scoring.js";
+export { runACH } from "./ach.js";
+export type { Hypothesis, AchResult } from "./ach.js";

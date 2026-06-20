@@ -19,6 +19,9 @@ import {
   roamOnce,
   listNodes,
   getSubtree,
+  runACH,
+  adjudicate,
+  calibrationStats,
 } from "@erebus/core";
 import {
   db,
@@ -284,6 +287,31 @@ app.post("/nodes/:id/game", (c) =>
 app.get("/nodes/:id/game", (c) =>
   guard(c, async () => c.json({ game_read: await latestGameRead(c.req.param("id")) }))
 );
+
+// POST /api/nodes/:id/ach -> Analysis of Competing Hypotheses (rival outcomes +
+// posterior distribution; folds the stated outcome's mass into P(outcome)).
+app.post("/nodes/:id/ach", (c) => guard(c, async () => c.json(await runACH(c.req.param("id")))));
+
+// PUT /api/nodes/:id/resolve { happened } -> operator adjudication (external
+// truth). Scores Brier against the node's probability.
+app.put("/nodes/:id/resolve", (c) =>
+  guard(c, async () => {
+    const body = await c.req.json().catch(() => ({}));
+    if (typeof body?.happened !== "boolean") return c.json({ error: "happened (boolean) required" }, 400);
+    const id = c.req.param("id");
+    const r = await adjudicate(id, body.happened, "operator");
+    if (!r) {
+      // adjudicate returns null for not-found OR already-resolved — disambiguate.
+      const [n] = await db.select().from(nodes).where(eq(nodes.id, id)).limit(1);
+      if (!n) return c.json({ error: "node not found" }, 404);
+      return c.json({ resolved: true, outcome: n.resolvedOutcome, brier: n.brier, already: true });
+    }
+    return c.json(r);
+  })
+);
+
+// GET /api/calibration -> real-world accuracy: resolved count, mean Brier, base rate.
+app.get("/calibration", (c) => guard(c, async () => c.json(await calibrationStats())));
 
 // POST /api/synthesize { ids } -> combine N branches into a new node.
 app.post("/synthesize", (c) =>

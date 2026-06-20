@@ -54,6 +54,11 @@ Every `origin="erebus"` branch grouped under its root theory; cards deep-link in
 ### Game-theory depth (the strategic layer)
 `POST /api/nodes/:id/game` runs a **Game Read** (Opus): players (payoff ranking, BATNA, dominant strategy, patience), game type, predicted equilibrium + type, **equilibrium-stability [0..1]**, and "outcome IS/IS NOT the equilibrium" — plus a **Decision layer** (Sonnet): focal point, leverage moves, no-regret action, **reversal tripwire** (fed back into the node's indicators). Stored in `game_reads`; stability is denormalized onto `nodes.stability` and folds into state: a confirming-but-fragile node becomes **`tipping`** (violet) — *the real alpha*. Autonomous roam is biased toward low-stability nodes (probe the knife-edge). Shown in a Game Read panel in NodeDetail.
 
+### Probability, ACH & calibration (the analytical core)
+- **Bayesian greening:** `nodes.probability` is updated by **log-odds** — each signal match contributes ±`weight*LLR_SCALE` nats; `confirmation` (the [-1,1] state/UI scalar) is a pure view (`2p-1`). Sigmoid gives natural diminishing returns near certainty. `setProbability()` lets ACH set P directly. (`packages/core/src/greening.ts`)
+- **ACH** (`POST /api/nodes/:id/ach`): tracks 3–5 mutually-exclusive rival outcomes as a posterior distribution; the stated outcome's mass folds into the node's P(outcome); flags when reality is selecting a *different* equilibrium. Shown as a bar chart in NodeDetail. (`packages/core/src/ach.ts`)
+- **Real calibration:** forecasts no longer self-grade. They resolve against **external truth** — `resolveByMarket()` (realized instrument move vs expectation, horizon-anchored) or operator adjudication (`PUT /api/nodes/:id/resolve {happened}`). Brier = `(probability − actual)²`; `GET /api/calibration` returns resolved count / mean Brier / base rate (shown in the Explorer stat row). Adjudication is idempotent. (`packages/core/src/scoring.ts`, `packages/market/src/resolve.ts`)
+
 ### Shadow Board (`/shadow`)
 Deception/tradecraft read; can spawn a contested counter-forecast — now **connected into the tree** (`parentId` = source, `origin:"shadow"`, ⚡ branch label) and rendered in NodeDetail's "Strategic links".
 
@@ -83,9 +88,6 @@ Deception/tradecraft read; can spawn a contested counter-forecast — now **conn
 
 From the game-theory design panel + subsystem audit, in priority order:
 - **Equilibrium-break & tripwire alerts** — a live rail that fires when a corroborated node destabilizes or a decision's tripwire greens.
-- **Analysis of Competing Hypotheses (ACH)** — replace single confirm/refute with posteriors across 3–5 rival equilibria; reality *selects* among them.
-- **Bayesian/log-odds greening** — `applyMatch` as a calibrated log-likelihood update; sibling branches become a coherent distribution.
-- **Real Brier calibration** — resolve nodes against EXTERNAL ground truth (realized market move / operator adjudication); today it's self-referential.
 - **Value-of-Information ranker** — roam toward the most decision-relevant uncertainty, not the most-confirmed node.
 - **Position sizer** — fractional-Kelly read-only sizing for instrument-linked nodes (never auto-trade).
 - **Pre-mortem / red-team** as a first-class node op; **strategic edge auto-population** (best_response_to/deters) during expansion.

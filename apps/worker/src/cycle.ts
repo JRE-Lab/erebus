@@ -3,7 +3,8 @@
 //
 // A single cycle:
 //   1) Ingest reality (ingestAll) — free, always allowed even past the daily cap.
-//   2) Resolve any nodes whose horizon has passed (free; writes Brier).
+//   2) Count nodes due for adjudication (free; resolution is external now —
+//      market auto-resolves, the operator adjudicates).
 //   3) While under CYCLE_BUDGET_USD (and the daily cap): pick a node and extend
 //      the tree — expandForward, and occasionally a deeper pass (runDebate to
 //      sharpen, or runShadowRead for a deception read on a green node).
@@ -71,13 +72,15 @@ export async function runCycle(opts: RunCycleOpts = {}): Promise<CycleSummary> {
     }
   }
 
-  // 2) Resolve due nodes — free; writes Brier + advances calibration.
+  // 2) Count due-unresolved nodes — free. Resolution itself is EXTERNAL now
+  // (market auto-resolves in the market tick; the operator adjudicates in the
+  // UI); we no longer self-grade on internal confirmation.
   try {
     const r = await resolveDueNodes();
-    resolved = r.resolved;
-    if (resolved) notes.push(`resolved ${resolved} due node(s)`);
+    resolved = r.resolved; // always 0 now (kept for CycleSummary shape)
+    if (r.due) notes.push(`${r.due} node(s) due for adjudication`);
   } catch (e) {
-    notes.push(`resolve failed: ${(e as Error).message}`);
+    notes.push(`resolve-check failed: ${(e as Error).message}`);
   }
 
   // Daily ceiling gates all paid (LLM) work for the rest of the cycle.

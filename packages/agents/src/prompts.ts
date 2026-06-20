@@ -209,6 +209,30 @@ Return JSON:
 }`;
 }
 
+// --- ACH: Analysis of Competing Hypotheses over rival outcomes --------------
+export function achPrompt(
+  node: { question: string; outcome: string },
+  signals: string[]
+): string {
+  return `${PERSONA}
+
+Run an ANALYSIS OF COMPETING HYPOTHESES on this forecast. Enumerate 3-5 MUTUALLY EXCLUSIVE, COLLECTIVELY EXHAUSTIVE rival outcomes for the question — rival equilibria reality could select. ONE of them must be the forecast's own stated outcome. Then, weighing the evidence below, assign each a current posterior PROBABILITY (they MUST sum to ~1.0). Diagnostic evidence is that which discriminates BETWEEN hypotheses, not that consistent with all.
+
+QUESTION: ${node.question}
+STATED OUTCOME (one hypothesis): ${node.outcome}
+
+EVIDENCE (recent matched signals):
+${signals.length ? signals.map((s, i) => `${i + 1}. ${s}`).join("\n") : "(no signals matched yet — weight by base rates and priors)"}
+
+Return JSON:
+{
+  "hypotheses": [ { "label": "a terse rival outcome", "probability": 0.0 } ],
+  "outcomeIndex": 0,
+  "note": "one line: which hypothesis the evidence currently favors and the key discriminator"
+}
+(outcomeIndex = the index in hypotheses[] that matches the STATED OUTCOME above.)`;
+}
+
 // --- Game Read: structured game-theory model of a forecast ------------------
 export function gameReadPrompt(node: {
   question: string;

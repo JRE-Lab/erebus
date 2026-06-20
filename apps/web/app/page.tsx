@@ -11,7 +11,9 @@ import {
   roam,
   fetchContinuousRoam,
   setContinuousRoam,
+  fetchCalibration,
   type AutonomousState,
+  type CalibrationStats,
 } from "@/lib/api";
 import { ForecastTree } from "@/components/ForecastTree";
 import { NodeDetail } from "@/components/NodeDetail";
@@ -60,6 +62,8 @@ export default function ExplorerPage() {
   // continuous roam: worker branches back-to-back while on
   const [continuous, setContinuous] = useState(false);
   const [contBusy, setContBusy] = useState(false);
+  // real-world calibration (Brier over externally-resolved forecasts)
+  const [cal, setCal] = useState<CalibrationStats | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -81,6 +85,11 @@ export default function ExplorerPage() {
     try {
       const c = await fetchContinuousRoam();
       setContinuous(Boolean(c?.continuous));
+    } catch {
+      /* offline-safe */
+    }
+    try {
+      setCal(await fetchCalibration());
     } catch {
       /* offline-safe */
     }
@@ -344,6 +353,17 @@ export default function ExplorerPage() {
             <Stat label="greens" value={greensShown} accent="var(--nx-green)" glow />
             <Stat label="launch points" value={launchShown} accent="var(--nx-green)" />
             <Stat label="erebus-made" value={erebusShown} accent="var(--nx-amber)" />
+            {cal && cal.resolved > 0 && cal.meanBrier != null && (
+              <div className="flex items-baseline gap-1.5" title={`${cal.resolved} forecasts resolved against external truth`}>
+                <span
+                  className="text-lg font-bold tabular-nums"
+                  style={{ color: cal.meanBrier < 0.25 ? "var(--nx-green)" : "var(--nx-red)" }}
+                >
+                  {cal.meanBrier.toFixed(2)}
+                </span>
+                <span className="nx-label">Brier · {cal.resolved}</span>
+              </div>
+            )}
             {focusedRoot && (
               <span className="nx-chip nx-chip-indigo" title={focusedRoot.question}>
                 focused · {focusedRoot.id}

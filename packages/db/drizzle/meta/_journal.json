@@ -36,6 +36,13 @@
       "when": 1781753411511,
       "tag": "0004_cheerful_quicksilver",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1781975210984,
+      "tag": "0005_safe_franklin_storm",
+      "breakpoints": true
     }
   ]
 }

@@ -16,7 +16,7 @@ import { db, nodes, worldviewSnapshots, recordEvent, getSetting, isPaused } from
 import { listNodes, calibrationScore, roamOnce } from "@erebus/core";
 import { ingestAll, rematchRecent, matchNode } from "@erebus/ingest";
 import { runGardener } from "@erebus/gardener";
-import { mapUnmappedTheories, refreshMarket } from "@erebus/market";
+import { mapUnmappedTheories, refreshMarket, resolveByMarket } from "@erebus/market";
 import { llmLive, call, OPUS } from "@erebus/agents";
 import { runCycle } from "./cycle.js";
 import { withinDailyBudget } from "./governors.js";
@@ -154,7 +154,9 @@ export function startScheduler(): SchedulerHandle {
   const marketTick = guarded("market", async () => {
     const m = await mapUnmappedTheories(12);
     const r = await refreshMarket();
-    return { mapped: m.mapped, newLinks: m.created, ...r };
+    // External-truth calibration: let realized moves resolve due instrument-linked forecasts.
+    const res = await resolveByMarket();
+    return { mapped: m.mapped, newLinks: m.created, ...r, resolvedByMarket: res.resolved };
   });
 
   const timers: NodeJS.Timeout[] = [

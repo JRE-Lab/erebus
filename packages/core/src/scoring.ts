@@ -1,38 +1,54 @@
-// Resolution + calibration. When a node's horizon passes it resolves true/false
-// and writes its Brier score; calibration is the mean Brier over resolved nodes.
+// Resolution + calibration — against EXTERNAL ground truth, not the node's own
+// greening. A forecast resolves only when reality adjudicates it: a realized
+// market move (market package) or the operator marking it happened/didn't. Brier
+// is scored against the node's P(outcome) AT resolution, so calibration finally
+// measures real-world accuracy instead of grading its own homework.
 import { and, eq, isNull, lte, sql } from "drizzle-orm";
 import { db, nodes, recordEvent } from "@erebus/db";
-import { THRESH } from "./greening.js";
 
-export async function resolveDueNodes(): Promise<{ resolved: number }> {
-  const due = await db
-    .select()
+// Due = horizon passed and not yet resolved. We surface the count (so the UI can
+// prompt adjudication) but DO NOT auto-resolve on the internal confirmation —
+// that was self-referential. Real resolution comes from adjudicate().
+export async function resolveDueNodes(): Promise<{ resolved: number; due: number }> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
     .from(nodes)
     .where(and(isNull(nodes.resolved), lte(nodes.horizon, new Date())));
+  return { resolved: 0, due: Number(row?.n ?? 0) };
+}
 
-  let resolved = 0;
-  for (const node of due) {
-    const isTrue = node.confirmation >= THRESH.corroborated || (node.confirmation > 0 && node.confirmation > Math.abs(THRESH.contradicted));
-    const actual = isTrue ? 1 : 0;
-    const brier = Math.pow(node.confidence - actual, 2);
-    await db
-      .update(nodes)
-      .set({
-        resolved: true,
-        brier,
-        state: isTrue ? "resolved_true" : "resolved_false",
-        updatedAt: new Date(),
-      })
-      .where(eq(nodes.id, node.id));
-    await recordEvent({
-      nodeId: node.id,
-      kind: "resolved",
-      causeType: "job",
-      after: { resolved: isTrue, brier },
-    });
-    resolved++;
-  }
-  return { resolved };
+// The real resolver: reality says the forecast happened (or didn't). Scores Brier
+// against the probability the node held at resolution. source = market | operator.
+export async function adjudicate(
+  nodeId: string,
+  happened: boolean,
+  source: "market" | "operator" = "operator"
+): Promise<{ resolved: true; outcome: boolean; brier: number } | null> {
+  const [node] = await db.select().from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+  if (!node) return null;
+  if (node.resolved) return null; // idempotent — never re-resolve (operator vs market race)
+  const actual = happened ? 1 : 0;
+  const p = node.probability ?? (node.confirmation + 1) / 2;
+  const brier = Math.pow(p - actual, 2);
+  await db
+    .update(nodes)
+    .set({
+      resolved: true,
+      resolvedOutcome: happened,
+      resolvedSource: source,
+      brier,
+      state: happened ? "resolved_true" : "resolved_false",
+      updatedAt: new Date(),
+    })
+    .where(eq(nodes.id, nodeId));
+  await recordEvent({
+    nodeId,
+    kind: "resolved",
+    causeType: source === "market" ? "signal_match" : "job",
+    before: { probability: p, state: node.state },
+    after: { resolved: happened, brier: Number(brier.toFixed(3)), source },
+  });
+  return { resolved: true, outcome: happened, brier };
 }
 
 export async function calibrationScore(): Promise<number | null> {
@@ -41,4 +57,29 @@ export async function calibrationScore(): Promise<number | null> {
     .from(nodes)
     .where(eq(nodes.resolved, true));
   return row?.avg ?? null;
+}
+
+// Richer calibration read for the UI: how many resolved, mean Brier (lower is
+// better; 0.25 = a coin flip), the realized base rate, and what's awaiting
+// adjudication. Brier here is meaningful because outcomes are external.
+export async function calibrationStats(): Promise<{
+  resolved: number;
+  meanBrier: number | null;
+  trueRate: number | null;
+  dueUnresolved: number;
+}> {
+  const [agg] = await db
+    .select({
+      resolved: sql<number>`count(*) FILTER (WHERE ${nodes.resolved} = true)::int`,
+      meanBrier: sql<number>`AVG(${nodes.brier})`,
+      trueRate: sql<number>`AVG(CASE WHEN ${nodes.resolvedOutcome} THEN 1.0 ELSE 0.0 END) FILTER (WHERE ${nodes.resolved} = true)`,
+      due: sql<number>`count(*) FILTER (WHERE ${nodes.resolved} IS NULL AND ${nodes.horizon} <= now())::int`,
+    })
+    .from(nodes);
+  return {
+    resolved: Number(agg?.resolved ?? 0),
+    meanBrier: agg?.meanBrier ?? null,
+    trueRate: agg?.trueRate ?? null,
+    dueUnresolved: Number(agg?.due ?? 0),
+  };
 }

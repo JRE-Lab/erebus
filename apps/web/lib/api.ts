@@ -314,6 +314,36 @@ export const gameRead = (id: string) =>
     `/nodes/${encodeURIComponent(id)}/game`
   );
 
+// Analysis of Competing Hypotheses (rival outcomes + posterior distribution).
+export interface Hypothesis {
+  label: string;
+  probability: number;
+}
+export interface AchResult {
+  hypotheses: Hypothesis[];
+  outcomeProbability: number | null;
+  leaderIsOutcome: boolean;
+  note: string;
+  cost: number;
+  offline: boolean;
+}
+export const runACH = (id: string) => post<AchResult>(`/nodes/${encodeURIComponent(id)}/ach`);
+
+// Operator adjudication (external truth) — resolves a forecast + scores Brier.
+export const resolveNode = (id: string, happened: boolean) =>
+  put<{ resolved: true; outcome: boolean; brier: number }>(`/nodes/${encodeURIComponent(id)}/resolve`, {
+    happened,
+  });
+
+// Real-world calibration.
+export interface CalibrationStats {
+  resolved: number;
+  meanBrier: number | null;
+  trueRate: number | null;
+  dueUnresolved: number;
+}
+export const fetchCalibration = () => req<CalibrationStats>("/calibration");
+
 export const synthesize = (ids: string[]) => post<SynthesizeResponse>("/synthesize", { ids });
 
 export const fetchSignals = (limit?: number) =>

@@ -10,6 +10,7 @@ export { fetchCandles, getQuote, changePct } from "./sources.js";
 export type { Candles, Quote } from "./sources.js";
 export { mapTheory, mapUnmappedTheories } from "./map.js";
 export { refreshMarket } from "./correlate.js";
+export { resolveByMarket } from "./resolve.js";
 export { getMarketOverview } from "./overview.js";
 export type {
   MarketOverview,

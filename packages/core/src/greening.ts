@@ -10,6 +10,20 @@ export const THRESH = {
   contradicted: -0.5, // red
 };
 
+// Bayesian update scale: how many nats of evidence a unit-weight match carries.
+// ~3-4 strong (weight 1) confirms cross into corroborated, matching the prior
+// feel of the system while giving proper diminishing returns near certainty.
+const LLR_SCALE = 0.5;
+const P_FLOOR = 0.02;
+const P_CEIL = 0.98;
+
+const clampP = (p: number) => Math.max(P_FLOOR, Math.min(P_CEIL, p));
+const toLogOdds = (p: number) => Math.log(clampP(p) / (1 - clampP(p)));
+const fromLogOdds = (lo: number) => clampP(1 / (1 + Math.exp(-lo)));
+// confirmation (the display/state scalar in [-1,1]) is a pure view of probability.
+const confFromP = (p: number) => 2 * clampP(p) - 1;
+const pFromConf = (c: number) => clampP((c + 1) / 2);
+
 // Below this equilibrium-stability, a confirming node is "tipping": greening on
 // reality yet sitting on a fragile equilibrium a small move could flip.
 export const FRAGILE_BELOW = 0.35;
@@ -30,51 +44,76 @@ export function stateFromConfirmation(
   return "speculative";
 }
 
-// Apply a single signal match to a node: move confirmation, recompute state,
-// promote to launch point when corroborated, and log provenance.
+// Apply a single signal match as a BAYESIAN update: the match contributes a
+// log-likelihood-ratio (± weight*scale nats) to the node's P(outcome). The
+// confirmation scalar [-1,1] is a pure view of that probability (2p-1), so the
+// state machine + UI keep working. Sigmoid gives natural diminishing returns
+// near certainty (no more raw volume saturation).
 export async function applyMatch(
   nodeId: string,
   effect: MatchEffect,
   weight: number,
   causeId?: string
-): Promise<{ confirmation: number; state: NodeState } | null> {
+): Promise<{ confirmation: number; state: NodeState; probability: number } | null> {
   const [node] = await db.select().from(nodes).where(eq(nodes.id, nodeId)).limit(1);
   if (!node) return null;
 
-  const delta = effect === "confirm" ? weight : effect === "refute" ? -weight : 0;
-  if (delta === 0) return { confirmation: node.confirmation, state: node.state as NodeState };
+  const p0 = node.probability ?? pFromConf(node.confirmation);
+  const w = Math.max(0, Math.min(1, weight));
+  const dir = effect === "confirm" ? 1 : effect === "refute" ? -1 : 0;
+  // Neutral, or a zero/non-positive-weight match: no evidence, no DB write.
+  if (dir === 0 || w === 0) {
+    return { confirmation: confFromP(p0), state: node.state as NodeState, probability: p0 };
+  }
 
-  // Each strong (weight~1) match moves confirmation ~0.4; ~2 cross into
-  // corroborating, ~4 reach corroborated. Volume of matches is the main driver.
-  const confirmation = Math.max(-1, Math.min(1, node.confirmation + delta * 0.4));
+  const llr = dir * w * LLR_SCALE;
+  const probability = fromLogOdds(toLogOdds(p0) + llr);
+  const confirmation = confFromP(probability);
   const state = stateFromConfirmation(confirmation, node.resolved, node.brier, node.stability);
   const isLaunch = state === "corroborated";
 
   await db
     .update(nodes)
-    .set({ confirmation, state, isLaunchPoint: isLaunch || node.isLaunchPoint, updatedAt: new Date() })
+    .set({ probability, confirmation, state, isLaunchPoint: isLaunch || node.isLaunchPoint, updatedAt: new Date() })
     .where(eq(nodes.id, nodeId));
 
+  await recordEvent({
+    nodeId,
+    kind: state !== node.state ? "state_change" : "confirmation_change",
+    causeType: "signal_match",
+    causeId,
+    before: { state: node.state, probability: Number(p0.toFixed(3)), confirmation: node.confirmation },
+    after: { state, probability: Number(probability.toFixed(3)), confirmation, llr: Number(llr.toFixed(3)) },
+  });
+  return { confirmation, state, probability };
+}
+
+// Set a node's P(outcome) directly (e.g. from an ACH posterior) and recompute
+// confirmation + state. Returns the new derived values.
+export async function setProbability(
+  nodeId: string,
+  probability: number
+): Promise<{ confirmation: number; state: NodeState; probability: number } | null> {
+  const [node] = await db.select().from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+  if (!node) return null;
+  const p = clampP(probability);
+  const confirmation = confFromP(p);
+  const state = stateFromConfirmation(confirmation, node.resolved, node.brier, node.stability);
+  const isLaunch = state === "corroborated";
+  await db
+    .update(nodes)
+    .set({ probability: p, confirmation, state, isLaunchPoint: isLaunch || node.isLaunchPoint, updatedAt: new Date() })
+    .where(eq(nodes.id, nodeId));
   if (state !== node.state) {
     await recordEvent({
       nodeId,
       kind: "state_change",
-      causeType: "signal_match",
-      causeId,
-      before: { state: node.state, confirmation: node.confirmation },
-      after: { state, confirmation },
-    });
-  } else {
-    await recordEvent({
-      nodeId,
-      kind: "confirmation_change",
-      causeType: "signal_match",
-      causeId,
-      before: { confirmation: node.confirmation },
-      after: { confirmation },
+      causeType: "job",
+      before: { state: node.state, probability: node.probability },
+      after: { state, probability: p },
     });
   }
-  return { confirmation, state };
+  return { confirmation, state, probability: p };
 }
 
 // Apply an equilibrium-stability reading (from a game read) to a node and

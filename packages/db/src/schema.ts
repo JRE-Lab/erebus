@@ -33,13 +33,17 @@ export const nodes = pgTable(
     branchLabel: text("branch_label"),
     parentId: text("parent_id").references((): AnyPgColumn => nodes.id),
     synthesizedFrom: text("synthesized_from").array().notNull().default([]),
-    confirmation: real("confirmation").notNull().default(0), // THE GREEN LEVEL
+    confirmation: real("confirmation").notNull().default(0), // THE GREEN LEVEL (derived from probability: 2p-1)
+    probability: real("probability").notNull().default(0.5), // Bayesian P(outcome) — log-odds updated
+    hypotheses: jsonb("hypotheses").notNull().default([]), // ACH rival outcomes [{label,probability}]
     confidence: real("confidence").notNull().default(0.5), // internal (debate), secondary
     stability: real("stability").notNull().default(0.5), // equilibrium stability [0..1] (game read)
     equilibriumType: text("equilibrium_type"), // nash|subgame_perfect|mixed|focal|none
     state: text("state").notNull().default("speculative"),
-    // speculative|corroborating|corroborated|contradicted|resolved_true|resolved_false|dormant|merged
+    // speculative|corroborating|corroborated|contradicted|tipping|resolved_true|resolved_false|dormant|merged
     resolved: boolean("resolved"),
+    resolvedOutcome: boolean("resolved_outcome"), // did it ACTUALLY happen (external truth)
+    resolvedSource: text("resolved_source"), // market|operator
     brier: real("brier"),
     isLaunchPoint: boolean("is_launch_point").notNull().default(false),
     origin: text("origin").notNull().default("user"), // user | erebus (autonomous)

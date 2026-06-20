@@ -12,9 +12,12 @@ import {
   fetchDirections,
   pursueDirection,
   gameRead,
+  runACH,
+  resolveNode,
   type Direction,
   type GameReadRow,
   type RelationshipRow,
+  type Hypothesis,
 } from "@/lib/api";
 
 // Angle accent colors for the four tailored directions.
@@ -86,7 +89,7 @@ interface Props {
   onPursued?: (id: string) => void;
 }
 
-type Busy = null | "expand" | "debate" | "shadow" | "synthesize" | "game";
+type Busy = null | "expand" | "debate" | "shadow" | "synthesize" | "game" | "ach" | "resolve";
 
 export function NodeDetail({ nodeId, selectedIds, onRefresh, onClearSelection, onPursued }: Props) {
   const [data, setData] = useState<NodeDetailData | null>(null);
@@ -251,6 +254,14 @@ export function NodeDetail({ nodeId, selectedIds, onRefresh, onClearSelection, o
           >
             {busy === "game" ? "Reading…" : "Game read"}
           </button>
+          <button
+            className="nx-btn"
+            disabled={busy !== null}
+            onClick={() => run("ach", () => runACH(nodeId), "ACH")}
+            title="Analysis of Competing Hypotheses — rival outcomes + posteriors"
+          >
+            {busy === "ach" ? "Analyzing…" : "ACH"}
+          </button>
           {multi && (
             <button
               className="nx-btn nx-btn-primary"
@@ -409,17 +420,17 @@ export function NodeDetail({ nodeId, selectedIds, onRefresh, onClearSelection, o
               )}
             </div>
 
-            {/* confirmation / confidence gradient */}
-            <Section label="Confirmation — the green level">
+            {/* confirmation / probability gradient */}
+            <Section label="P(outcome) — the Bayesian green level">
               <GradientBar
                 value={node.confirmation ?? 0}
                 color={STATE_COLORS[node.state as NodeState] ?? STATE_COLORS.speculative}
               />
               <div className="mt-2 flex items-center justify-between text-[11px] text-nx-text-muted">
                 <span>
-                  confirmation{" "}
+                  P(outcome){" "}
                   <span className="nx-mono text-nx-text-secondary">
-                    {(node.confirmation ?? 0).toFixed(2)}
+                    {(((node as { probability?: number }).probability ?? (node.confirmation + 1) / 2) * 100).toFixed(0)}%
                   </span>
                 </span>
                 <span>
@@ -431,6 +442,16 @@ export function NodeDetail({ nodeId, selectedIds, onRefresh, onClearSelection, o
                 {node.isLaunchPoint && <span className="nx-chip nx-chip-green">launch point</span>}
               </div>
             </Section>
+
+            {/* ACH — rival hypotheses + posteriors */}
+            <AchPanel hypotheses={(node as { hypotheses?: unknown }).hypotheses} outcome={node.outcome} />
+
+            {/* resolution — external truth + Brier */}
+            <ResolutionPanel
+              node={node}
+              busy={busy}
+              onResolve={(happened) => run("resolve", () => resolveNode(nodeId, happened), "Resolve")}
+            />
 
             {/* GAME READ — strategic depth: players, equilibrium, stability, decision */}
             <GameReadPanel game={game} />
@@ -657,6 +678,118 @@ function RelTag({ type }: { type?: string | null }) {
   const red = ["contradicts", "tension", "deters"].includes(t);
   const cls = red ? "nx-chip-red" : t === "supports" || t === "validates" ? "nx-chip-green" : "nx-chip-indigo";
   return <span className={`nx-chip ${cls}`}>{t.replace(/_/g, " ")}</span>;
+}
+
+function AchPanel({ hypotheses, outcome }: { hypotheses?: unknown; outcome?: string }) {
+  const hyps = Array.isArray(hypotheses) ? (hypotheses as Hypothesis[]) : [];
+  if (!hyps.length) {
+    return (
+      <Section label="Competing hypotheses (ACH)">
+        <Empty>no ACH yet — run one to track the rival outcomes reality is choosing between</Empty>
+      </Section>
+    );
+  }
+  const sorted = [...hyps].sort((a, b) => (b.probability ?? 0) - (a.probability ?? 0));
+  const leader = sorted[0];
+  // best-effort: is the stated outcome the leader?
+  const leaderIsOutcome = !!(outcome && leader && outcome.toLowerCase().includes((leader.label ?? "").toLowerCase().slice(0, 12)));
+  return (
+    <Section label="Competing hypotheses (ACH)">
+      <div className="space-y-1.5">
+        {sorted.map((h, i) => {
+          const pct = Math.round(Math.max(0, Math.min(1, h.probability ?? 0)) * 100);
+          const lead = i === 0;
+          return (
+            <div key={i}>
+              <div className="mb-0.5 flex items-center justify-between gap-2 text-[11px]">
+                <span className={lead ? "font-semibold text-nx-text-primary" : "text-nx-text-secondary"}>
+                  {lead ? "▸ " : ""}
+                  {h.label}
+                </span>
+                <span className="nx-mono text-nx-text-muted">{pct}%</span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-nx-bg-primary">
+                <div
+                  className="h-full rounded-full"
+                  style={{ width: `${pct}%`, background: lead ? "var(--nx-indigo)" : "var(--nx-border-strong)" }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {!leaderIsOutcome && leader && (
+        <p className="mt-2 text-[11px]" style={{ color: "#a855f7" }}>
+          ⚡ reality may be selecting a different equilibrium than the stated outcome
+        </p>
+      )}
+    </Section>
+  );
+}
+
+function ResolutionPanel({
+  node,
+  busy,
+  onResolve,
+}: {
+  node: NodeRow;
+  busy: Busy;
+  onResolve: (happened: boolean) => void;
+}) {
+  const resolved = (node as { resolved?: boolean | null }).resolved;
+  const outcome = (node as { resolvedOutcome?: boolean | null }).resolvedOutcome;
+  const brier = (node as { brier?: number | null }).brier;
+  const source = (node as { resolvedSource?: string | null }).resolvedSource;
+  const horizonPassed = node.horizon ? new Date(node.horizon).getTime() < Date.now() : false;
+  if (resolved) {
+    return (
+      <Section label="Resolution">
+        <div className="flex flex-wrap items-center gap-2 text-[12px]">
+          <span
+            className="nx-chip"
+            style={{
+              color: outcome ? "var(--nx-green)" : "var(--nx-red)",
+              borderColor: outcome ? "var(--nx-green)" : "var(--nx-red)",
+            }}
+          >
+            {outcome ? "happened ✓" : "did not happen ✕"}
+          </span>
+          {typeof brier === "number" && (
+            <span className="text-nx-text-muted">
+              Brier <span className="nx-mono text-nx-text-secondary">{brier.toFixed(3)}</span>{" "}
+              {brier < 0.25 ? "(beat a coin flip)" : "(worse than 50/50)"}
+            </span>
+          )}
+          {source && <span className="nx-badge">{source}</span>}
+        </div>
+      </Section>
+    );
+  }
+  return (
+    <Section label="Resolution">
+      <p className="mb-2 text-[11px] text-nx-text-muted">
+        {horizonPassed ? "Horizon passed — did reality bear this out?" : "Adjudicate against external truth when known."}
+      </p>
+      <div className="flex gap-2">
+        <button
+          className="nx-btn"
+          style={{ borderColor: "var(--nx-green)", color: "var(--nx-green)" }}
+          disabled={busy !== null}
+          onClick={() => onResolve(true)}
+        >
+          {busy === "resolve" ? "…" : "It happened"}
+        </button>
+        <button
+          className="nx-btn"
+          style={{ borderColor: "var(--nx-red)", color: "var(--nx-red)" }}
+          disabled={busy !== null}
+          onClick={() => onResolve(false)}
+        >
+          {busy === "resolve" ? "…" : "It didn't"}
+        </button>
+      </div>
+    </Section>
+  );
 }
 
 function GameReadPanel({ game }: { game?: GameReadRow | null }) {
