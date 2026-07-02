@@ -15,10 +15,14 @@ const SONNET = process.env.SONNET_MODEL || "claude-sonnet-4-6";
 const OAI_DEEP = process.env.OPENAI_DEEP_MODEL || "gpt-4o";
 const OAI_FAST = process.env.OPENAI_FAST_MODEL || "gpt-4o-mini";
 
-// USD per million tokens (input, output).
+// USD per million tokens (input, output). Keep in sync with Anthropic pricing —
+// this ledger feeds the budget governors, so wrong entries skew the caps.
 const PRICING: Record<string, { in: number; out: number }> = {
-  "claude-opus-4-8": { in: 15, out: 75 },
+  "claude-fable-5": { in: 10, out: 50 },
+  "claude-opus-4-8": { in: 5, out: 25 },
+  "claude-sonnet-5": { in: 3, out: 15 },
   "claude-sonnet-4-6": { in: 3, out: 15 },
+  "claude-haiku-4-5": { in: 1, out: 5 },
   "gpt-4o": { in: 2.5, out: 10 },
   "gpt-4o-mini": { in: 0.15, out: 0.6 },
 };
@@ -36,7 +40,12 @@ function anth(): Anthropic {
 }
 
 function cost(model: string, i: number, o: number): number {
-  const p = PRICING[model] ?? { in: 5, out: 15 };
+  // The API may return dated full IDs (e.g. claude-haiku-4-5-20251001) —
+  // fall back to a prefix match before the conservative default.
+  const p =
+    PRICING[model] ??
+    Object.entries(PRICING).find(([k]) => model.startsWith(k))?.[1] ??
+    { in: 5, out: 15 };
   return (p.in * i + p.out * o) / 1_000_000;
 }
 
@@ -66,11 +75,32 @@ async function retry<T>(fn: () => Promise<T>, tries = 2): Promise<T> {
 interface Raw { content: string; input: number; output: number; model: string; }
 
 async function callAnthropic(model: string, system: string | undefined, prompt: string, maxTokens: number): Promise<Raw> {
+  // Fable 5: thinking is always on (never send a thinking param), and safety
+  // classifiers can decline with stop_reason "refusal" (HTTP 200, empty
+  // content). Opt into the server-side fallback so a decline is transparently
+  // re-served by Opus 4.8 inside the same call (beta: server-side-fallback).
+  const fable = model.startsWith("claude-fable") || model.startsWith("claude-mythos");
   const res = await retry(() =>
-    anth().messages.create({ model, max_tokens: maxTokens, system, messages: [{ role: "user", content: prompt }] })
+    fable
+      ? (anth().beta.messages.create as unknown as (p: object) => Promise<Anthropic.Message>)({
+          model,
+          max_tokens: maxTokens,
+          system,
+          betas: ["server-side-fallback-2026-06-01"],
+          fallbacks: [{ model: "claude-opus-4-8" }],
+          messages: [{ role: "user", content: prompt }],
+        })
+      : anth().messages.create({ model, max_tokens: maxTokens, system, messages: [{ role: "user", content: prompt }] })
   );
+  // Filtering to text blocks also skips Fable's always-on thinking blocks.
   const content = res.content.filter((b) => b.type === "text").map((b) => (b as { type: "text"; text: string }).text).join("\n");
-  return { content, input: res.usage.input_tokens, output: res.usage.output_tokens, model };
+  // Whole-chain refusal (or empty decline): throw so the provider chain falls
+  // through to OpenAI instead of silently returning an empty result.
+  if (!content && (res as { stop_reason?: string }).stop_reason === "refusal") {
+    throw new Error(`anthropic refusal (${model})`);
+  }
+  const served = (res as { model?: string }).model || model;
+  return { content, input: res.usage.input_tokens, output: res.usage.output_tokens, model: served };
 }
 
 async function callOpenAI(model: string, system: string | undefined, prompt: string, maxTokens: number): Promise<Raw> {
