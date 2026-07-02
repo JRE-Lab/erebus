@@ -911,15 +911,23 @@ function GameReadPanel({ game }: { game?: GameReadRow | null }) {
 
 function OriginBadge({ origin }: { origin?: NodeRow["origin"] }) {
   const erebus = origin === "erebus";
-  const color = erebus ? "var(--nx-amber)" : "var(--nx-indigo)";
+  const shadow = origin === "shadow";
+  const color = shadow ? "#a855f7" : erebus ? "var(--nx-amber)" : "var(--nx-indigo)";
+  const bg = shadow ? "#a855f7" : erebus ? "#f59e0b" : "#6366f1";
   return (
     <span
       className="nx-badge"
-      style={{ color, borderColor: color, background: `${erebus ? "#f59e0b" : "#6366f1"}1a` }}
-      title={erebus ? "Autonomously created by EREBUS" : "Created by you"}
+      style={{ color, borderColor: color, background: `${bg}1a` }}
+      title={
+        shadow
+          ? "Autonomously created — the shadow layer (dark theory)"
+          : erebus
+            ? "Autonomously created by EREBUS"
+            : "Created by you"
+      }
     >
       <span className="nx-dot" style={{ background: color }} />
-      {erebus ? "EREBUS" : "you"}
+      {shadow ? "⚡ dark" : erebus ? "EREBUS" : "you"}
     </span>
   );
 }

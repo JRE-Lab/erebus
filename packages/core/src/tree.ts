@@ -48,7 +48,7 @@ interface ForecastShape {
 
 export async function createForecast(
   context: string,
-  opts: { id?: string } = {}
+  opts: { id?: string; origin?: "user" | "erebus" | "shadow"; eventAfter?: Record<string, unknown> } = {}
 ): Promise<{ node: NodeRow; cost: number; offline: boolean }> {
   const fallback: ForecastShape = {
     question: context.slice(0, 200),
@@ -78,10 +78,17 @@ export async function createForecast(
       horizon: data.horizon ? new Date(data.horizon) : null,
       domains: data.domains ?? [],
       confidence: data.confidence ?? 0.5,
+      origin: opts.origin ?? "user",
       embedding: emb,
     })
     .returning();
-  await recordEvent({ nodeId: id, kind: "created", causeType: "job", promptVersion: PROMPT_VERSION });
+  await recordEvent({
+    nodeId: id,
+    kind: "created",
+    causeType: "job",
+    after: opts.eventAfter,
+    promptVersion: PROMPT_VERSION,
+  });
   return { node: node!, cost, offline };
 }
 

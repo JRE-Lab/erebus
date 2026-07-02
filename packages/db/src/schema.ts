@@ -242,6 +242,24 @@ export const nodeInstruments = pgTable(
   (t) => ({ nodeIdx: index("node_instruments_node_idx").on(t.nodeId) })
 );
 
+// --- alerts: things the operator should know NOW -----------------------------
+// Derived from events by the worker's alert tick: a node greened / tipped /
+// contradicted, a reversal tripwire fired, a dark theory was born, a forecast
+// resolved. Rendered in the Explorer bell; optionally pushed via Telegram.
+export const alerts = pgTable(
+  "alerts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    kind: text("kind").notNull(), // greened|tipping|contradicted|resolved|genesis|dark_genesis|fragile
+    nodeId: text("node_id").references(() => nodes.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    detail: text("detail"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    seenAt: timestamp("seen_at", { withTimezone: true }),
+  },
+  (t) => ({ createdIdx: index("alerts_created_idx").on(t.createdAt) })
+);
+
 // --- settings: key/value app config (autonomous toggle, etc.) ---------------
 export const settings = pgTable("settings", {
   key: text("key").primaryKey(),
@@ -263,5 +281,6 @@ export const schema = {
   contentItems,
   nodeInstruments,
   gameReads,
+  alerts,
   settings,
 };

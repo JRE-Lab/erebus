@@ -49,7 +49,11 @@ export default function MadePage() {
     [byId]
   );
 
-  const made = useMemo(() => nodes.filter((n) => n.origin === "erebus"), [nodes]);
+  const made = useMemo(
+    () => nodes.filter((n) => n.origin === "erebus" || n.origin === "shadow"),
+    [nodes]
+  );
+  const darkCount = useMemo(() => made.filter((n) => n.origin === "shadow").length, [made]);
 
   // group erebus nodes under their root theory
   const groups = useMemo(() => {
@@ -78,6 +82,7 @@ export default function MadePage() {
           </div>
           <div className="flex gap-4 text-right">
             <Stat label="made" value={made.length} accent="var(--nx-amber)" />
+            <Stat label="dark" value={darkCount} accent="#a855f7" />
             <Stat label="greened" value={greens} accent="var(--nx-green)" />
           </div>
         </header>
@@ -115,7 +120,12 @@ export default function MadePage() {
                       style={{ borderLeftColor: STATE_COLORS[n.state as NodeState] ?? STATE_COLORS.speculative }}
                     >
                       <div className="mb-1 flex items-center justify-between gap-2">
-                        <span className="nx-mono text-[10px] text-nx-text-muted">{n.id}</span>
+                        <span className="nx-mono text-[10px] text-nx-text-muted">
+                          {n.origin === "shadow" && (
+                            <span title="dark theory" style={{ color: "#a855f7" }}>⚡ </span>
+                          )}
+                          {n.id}
+                        </span>
                         <span
                           className="nx-chip"
                           style={{

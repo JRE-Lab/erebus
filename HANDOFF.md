@@ -59,6 +59,15 @@ Every `origin="erebus"` branch grouped under its root theory; cards deep-link in
 - **ACH** (`POST /api/nodes/:id/ach`): tracks 3–5 mutually-exclusive rival outcomes as a posterior distribution; the stated outcome's mass folds into the node's P(outcome); flags when reality is selecting a *different* equilibrium. Shown as a bar chart in NodeDetail. (`packages/core/src/ach.ts`)
 - **Real calibration:** forecasts no longer self-grade. They resolve against **external truth** — `resolveByMarket()` (realized instrument move vs expectation, horizon-anchored) or operator adjudication (`PUT /api/nodes/:id/resolve {happened}`). Brier = `(probability − actual)²`; `GET /api/calibration` returns resolved count / mean Brier / base rate (shown in the Explorer stat row). Adjudication is idempotent. (`packages/core/src/scoring.ts`, `packages/market/src/resolve.ts`)
 
+### Genesis & dark theories (the theory factory)
+EREBUS births NEW root theories from the signal stream — no longer only expanding existing ones. `generateRootTheories({dark,count})` (`packages/core/src/genesis.ts`): one Opus call proposes theories from recent signals (existing roots excluded + local near-dup guard over ALL roots), each becomes a root via `createForecast` (origin `erebus`, or **`shadow` for dark theories** — the disciplined-tradecraft layer: hidden agendas, cui bono, cover narratives, always falsifiable). Newborns are greened via `matchNode` immediately; offline stubs are deleted, never shown. Explorer buttons **✦ Genesis / ⚡ Dark genesis** + `POST /api/genesis`; worker `genesis` tick every `GENESIS_EVERY_MIN` (240) births 2 strategic + 2 dark per tick (budget re-checked between batches). Dark theories are marked ⚡ violet everywhere (Explorer roots, Made tab, OriginBadge).
+
+### Alerts
+`alerts` table (migration 0006) + worker tick (10m, **ungated** — runs even paused/off-hours since it's free) derives operator alerts from provenance events: greened / tipping / contradicted / resolved / fragile-equilibrium / theory-born. Watermark advances to the last processed event's DB timestamp (backlog- and clock-skew-safe); first run initializes silently (no historical flood); per-(node,kind) dedup 24h; seen alerts pruned after 30d. UI: bell with unseen badge in the Explorer (click an alert → jumps to the node). Telegram push activates automatically if `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` are set in `.env`.
+
+### Operating hours
+`settings.operating_hours` `{on,startHour,endHour}` (UTC) — a worker-side window gating all paid ticks AND the continuous-roam loop; orthogonal to the manual Pause switch. `GET/PUT /api/hours`. Off by default (always-on within budgets).
+
 ### Shadow Board (`/shadow`)
 Deception/tradecraft read; can spawn a contested counter-forecast — now **connected into the tree** (`parentId` = source, `origin:"shadow"`, ⚡ branch label) and rendered in NodeDetail's "Strategic links".
 

@@ -209,6 +209,36 @@ Return JSON:
 }`;
 }
 
+// --- Genesis: birth NEW root theories from the signal stream ----------------
+// dark=false -> forward strategic theses. dark=true -> the shadow layer: hidden
+// agendas, cui bono, cover narratives, engineered crises — disciplined tradecraft,
+// never idle conspiracy: every dark theory must be FALSIFIABLE.
+export function genesisPrompt(opts: {
+  signals: string[];
+  existing: string[];
+  count: number;
+  dark: boolean;
+}): string {
+  const { signals, existing, count, dark } = opts;
+  const mode = dark
+    ? `Generate ${count} DARK THEORIES — the shadow layer beneath the headlines. For each: what powerful actors (states, agencies, firms, factions) may actually be doing versus what they say; who benefits from the current framing; what the noise might be cover FOR. Revealed preference over stated preference. Disciplined intelligence tradecraft, NOT idle conspiracy: each theory must name concrete observable indicators that would CONFIRM it and falsifiers that would KILL it. Prefer theories that are uncomfortable but testable.`
+    : `Generate ${count} NEW strategic forecast theories — significant, non-obvious, forward-looking theses about what is coming. Prefer second-order consequences and convergences across signals over restatements of any single headline.`;
+
+  return `${PERSONA}
+
+${mode}
+
+RECENT SIGNALS (the raw feed of reality):
+${signals.map((s, i) => `${i + 1}. ${s}`).join("\n")}
+
+THEORIES THAT ALREADY EXIST (do NOT duplicate or restate these):
+${existing.map((q) => `- ${q}`).join("\n") || "(none)"}
+
+Each theory becomes a root node of the forecast tree. For each, write a dense CONTEXT paragraph (3-5 sentences) containing: the central question, the predicted not-yet-happened outcome, why the signals point there, who the key actors are, and a rough time horizon. Make each theory distinct in domain or mechanism.
+
+Return JSON: { "theories": [ { "title": "<=80 chars", "context": "the dense paragraph" } ] }`;
+}
+
 // --- ACH: Analysis of Competing Hypotheses over rival outcomes --------------
 export function achPrompt(
   node: { question: string; outcome: string },

@@ -13,8 +13,9 @@
 // ============================================================================
 import { sql, desc } from "drizzle-orm";
 import { db, nodes, worldviewSnapshots, recordEvent, getSetting, isPaused } from "@erebus/db";
-import { listNodes, calibrationScore, roamOnce } from "@erebus/core";
+import { listNodes, calibrationScore, roamOnce, generateRootTheories } from "@erebus/core";
 import { ingestAll, rematchRecent, matchNode } from "@erebus/ingest";
+import { runAlerts } from "./alerts.js";
 import { runGardener } from "@erebus/gardener";
 import { mapUnmappedTheories, refreshMarket, resolveByMarket } from "@erebus/market";
 import { llmLive, call, OPUS } from "@erebus/agents";
@@ -29,18 +30,48 @@ function minutes(name: string, fallback: number): number {
   return Number.isFinite(v) && v > 0 ? v : fallback;
 }
 
+// Operating hours: an optional worker-side window (settings.operating_hours =
+// { on, startHour, endHour } in UTC). Outside the window all autonomous work is
+// skipped — orthogonal to the manual pause switch, which it never touches.
+async function withinOperatingHours(): Promise<boolean> {
+  try {
+    const h = await getSetting<{ on: boolean; startHour: number; endHour: number }>("operating_hours", {
+      on: false,
+      startHour: 0,
+      endHour: 24,
+    });
+    if (!h.on) return true;
+    const hour = new Date().getUTCHours();
+    const s = Number(h.startHour) || 0;
+    const e = Number(h.endHour) || 24;
+    if (s === e) return true; // degenerate window -> treat as always-open, never lock out
+    return s < e ? hour >= s && hour < e : hour >= s || hour < e; // wraps midnight
+  } catch {
+    return true; // fail-open: a settings blip never halts the engine
+  }
+}
+
 // Guard a tick so one failure never stops the loop, and skip if still running.
-function guarded(name: string, fn: () => Promise<unknown>): () => Promise<void> {
+// gates: 'all' (pause + hours, the default for paid work) | 'none' (free DB-only
+// work like alert derivation — runs even paused/off-hours so the operator still
+// hears about manual-action events).
+function guarded(name: string, fn: () => Promise<unknown>, gates: "all" | "none" = "all"): () => Promise<void> {
   let running = false;
   return async () => {
     if (running) {
       console.log(`[scheduler] ${name} still running — skipping this tick`);
       return;
     }
-    // Global pause kill-switch — skip all autonomous work while paused.
-    if (await isPaused()) {
-      console.log(`[scheduler] ${name} skipped — paused`);
-      return;
+    if (gates === "all") {
+      // Global pause kill-switch — skip all autonomous work while paused.
+      if (await isPaused()) {
+        console.log(`[scheduler] ${name} skipped — paused`);
+        return;
+      }
+      if (!(await withinOperatingHours())) {
+        console.log(`[scheduler] ${name} skipped — outside operating hours`);
+        return;
+      }
     }
     running = true;
     const t0 = Date.now();
@@ -159,6 +190,38 @@ export function startScheduler(): SchedulerHandle {
     return { mapped: m.mapped, newLinks: m.created, ...r, resolvedByMarket: res.resolved };
   });
 
+  // Genesis: birth NEW root theories from the signal stream — one strategic +
+  // one dark batch per tick. Gated by the autonomous toggle + daily budget.
+  const genesisEvery = minutes("GENESIS_EVERY_MIN", 240);
+  const genesisTick = guarded("genesis", async () => {
+    const a = await getSetting<{ enabled: boolean }>("autonomous", { enabled: true });
+    if (!a.enabled) return { skipped: "autonomous paused" };
+    if (!(await withinDailyBudget())) return { skipped: "daily budget" };
+    const light = await generateRootTheories({ dark: false, count: 2 });
+    // Re-check the ceiling between batches so one tick can't blow through it.
+    const dark = (await withinDailyBudget())
+      ? await generateRootTheories({ dark: true, count: 2 })
+      : { created: [], cost: 0, offline: false };
+    // Green the newborn roots against existing reality immediately.
+    for (const t of [...light.created, ...dark.created]) {
+      try {
+        await matchNode(t.id);
+      } catch {
+        /* greening best-effort */
+      }
+    }
+    return {
+      theories: light.created.length,
+      darkTheories: dark.created.length,
+      cost: Number((light.cost + dark.cost).toFixed(3)),
+    };
+  });
+
+  // Alerts: derive operator alerts from provenance events (free, no LLM —
+  // ungated so manual-action events still alert while paused/off-hours).
+  const alertsEvery = minutes("ALERTS_EVERY_MIN", 10);
+  const alertsTick = guarded("alerts", () => runAlerts(), "none");
+
   const timers: NodeJS.Timeout[] = [
     setInterval(ingestTick, ingestEvery * MIN),
     setInterval(rematchTick, rematchEvery * MIN),
@@ -166,6 +229,8 @@ export function startScheduler(): SchedulerHandle {
     setInterval(gardenTick, gardenEvery * MIN),
     setInterval(wvTick, worldviewEvery * MIN),
     setInterval(marketTick, marketEvery * MIN),
+    setInterval(genesisTick, genesisEvery * MIN),
+    setInterval(alertsTick, alertsEvery * MIN),
   ];
 
   // --- continuous roam: branch back-to-back while enabled --------------------
@@ -182,6 +247,7 @@ export function startScheduler(): SchedulerHandle {
   const roamLoop = async () => {
     try {
       if (await isPaused()) return scheduleRoam(15_000);
+      if (!(await withinOperatingHours())) return scheduleRoam(60_000); // sleep till the window reopens
       const cont = await getSetting<{ on: boolean }>("roam_continuous", { on: false });
       if (!cont.on) return scheduleRoam(8_000);
       const a = await getSetting<{ enabled: boolean }>("autonomous", { enabled: true });

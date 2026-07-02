@@ -72,9 +72,39 @@ export async function applyMatch(
   const state = stateFromConfirmation(confirmation, node.resolved, node.brier, node.stability);
   const isLaunch = state === "corroborated";
 
+  // ACH unification: the same evidence reallocates mass among the rival
+  // hypotheses — the stated-outcome hypothesis moves by the same LLR and the
+  // rivals renormalize, so reality SELECTS among the competing equilibria.
+  let hypotheses = node.hypotheses as Array<{ label: string; probability: number; isOutcome?: boolean }> | null;
+  if (Array.isArray(hypotheses) && hypotheses.length > 1 && hypotheses.some((h) => h?.isOutcome)) {
+    const hs = hypotheses.map((h) => ({ ...h }));
+    const oi = hs.findIndex((h) => h.isOutcome);
+    const prev = Math.max(P_FLOOR, Math.min(P_CEIL, hs[oi]!.probability));
+    const next = fromLogOdds(toLogOdds(prev) + llr);
+    const restPrev = 1 - prev;
+    const restNext = 1 - next;
+    for (let i = 0; i < hs.length; i++) {
+      if (i === oi) hs[i]!.probability = next;
+      else hs[i]!.probability = restPrev > 0 ? (hs[i]!.probability / restPrev) * restNext : restNext / (hs.length - 1);
+    }
+    // renormalize (clamping can introduce small drift) so the masses sum to 1
+    const total = hs.reduce((a, h) => a + h.probability, 0);
+    if (total > 0) for (const h of hs) h.probability = h.probability / total;
+    hypotheses = hs;
+  } else {
+    hypotheses = null; // unchanged — don't rewrite the column
+  }
+
   await db
     .update(nodes)
-    .set({ probability, confirmation, state, isLaunchPoint: isLaunch || node.isLaunchPoint, updatedAt: new Date() })
+    .set({
+      probability,
+      confirmation,
+      state,
+      isLaunchPoint: isLaunch || node.isLaunchPoint,
+      ...(hypotheses ? { hypotheses: hypotheses as object } : {}),
+      updatedAt: new Date(),
+    })
     .where(eq(nodes.id, nodeId));
 
   await recordEvent({

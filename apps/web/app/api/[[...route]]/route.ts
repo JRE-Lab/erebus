@@ -22,6 +22,7 @@ import {
   runACH,
   adjudicate,
   calibrationStats,
+  generateRootTheories,
 } from "@erebus/core";
 import {
   db,
@@ -34,6 +35,7 @@ import {
   relationships,
   contentItems,
   worldviewSnapshots,
+  alerts,
   nodes,
   embed,
   nearest,
@@ -56,7 +58,7 @@ import {
   filePath as contentFilePath,
 } from "@erebus/content";
 import { readFile } from "node:fs/promises";
-import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -400,6 +402,59 @@ app.get("/cost", (c) =>
       allTime: Number(row.all_time ?? 0),
       jobs: Number(row.jobs ?? 0),
     });
+  })
+);
+
+// --- Genesis: birth new root theories on demand ------------------------------
+// POST /api/genesis { dark?, count? } -> EREBUS reads the signal stream and
+// creates new root theories (origin erebus, or shadow when dark). Newborns are
+// greened against existing signals before returning.
+app.post("/genesis", (c) =>
+  guard(c, async () => {
+    const body = await c.req.json().catch(() => ({}));
+    const r = await generateRootTheories({ dark: Boolean(body?.dark), count: Number(body?.count) || 2 });
+    for (const t of r.created) {
+      try { await matchNode(t.id); } catch { /* greening best-effort */ }
+    }
+    return c.json(r);
+  })
+);
+
+// --- Alerts -------------------------------------------------------------------
+// GET /api/alerts?limit= -> recent alerts (newest first) + unseen count.
+app.get("/alerts", (c) =>
+  guard(c, async () => {
+    const limit = Math.min(100, Number(c.req.query("limit")) || 40);
+    const rows = await db.select().from(alerts).orderBy(desc(alerts.createdAt)).limit(limit);
+    const [u] = await db.select({ n: sql<number>`count(*)::int` }).from(alerts).where(isNull(alerts.seenAt));
+    return c.json({ alerts: rows, unseen: Number(u?.n ?? 0) });
+  })
+);
+// PUT /api/alerts/seen -> mark everything seen.
+app.put("/alerts/seen", (c) =>
+  guard(c, async () => {
+    await db.update(alerts).set({ seenAt: new Date() }).where(isNull(alerts.seenAt));
+    return c.json({ ok: true });
+  })
+);
+
+// --- Operating hours (worker-side autonomous window, UTC) ---------------------
+app.get("/hours", (c) =>
+  guard(c, async () => {
+    const h = await getSetting("operating_hours", { on: false, startHour: 0, endHour: 24 });
+    return c.json(h);
+  })
+);
+app.put("/hours", (c) =>
+  guard(c, async () => {
+    const body = await c.req.json().catch(() => ({}));
+    const h = {
+      on: Boolean(body?.on),
+      startHour: Math.max(0, Math.min(23, Number(body?.startHour) || 0)),
+      endHour: Math.max(1, Math.min(24, Number(body?.endHour) || 24)),
+    };
+    await setSetting("operating_hours", h);
+    return c.json(h);
   })
 );
 

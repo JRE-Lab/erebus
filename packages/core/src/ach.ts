@@ -9,6 +9,7 @@ import { callJSON, achPrompt, OPUS } from "@erebus/agents";
 export interface Hypothesis {
   label: string;
   probability: number;
+  isOutcome?: boolean; // marks the node's stated outcome among the rivals
 }
 
 interface AchShape {
@@ -27,7 +28,12 @@ function normalize(hyps: Hypothesis[]): Hypothesis[] {
     const u = clean.length ? 1 / clean.length : 0;
     return clean.map((h) => ({ ...h, probability: u }));
   }
-  return clean.map((h) => ({ ...h, probability: h.probability / sum }));
+  // Floor each mass at an epsilon so no rival hits exactly 0 — a zero would be
+  // an absorbing state under the log-odds reallocation in applyMatch.
+  const EPS = 0.01;
+  const floored = clean.map((h) => ({ ...h, probability: Math.max(EPS, h.probability / sum) }));
+  const total = floored.reduce((a, h) => a + h.probability, 0);
+  return floored.map((h) => ({ ...h, probability: h.probability / total }));
 }
 
 export interface AchResult {
@@ -72,13 +78,16 @@ export async function runACH(nodeId: string): Promise<AchResult | null> {
     return { hypotheses: [], outcomeProbability: null, leaderIsOutcome: false, note: data.note ?? "", cost, offline };
   }
 
-  // Which hypothesis is the stated outcome (matched by label, falling back to 0)?
-  let idx = targetLabel ? hypotheses.findIndex((h) => h.label === targetLabel) : 0;
-  if (idx < 0) idx = 0;
-  const outcomeProbability = hypotheses[idx]!.probability;
+  // Which hypothesis is the stated outcome? Matched by label — if the label got
+  // filtered/renamed we do NOT guess: persist without any isOutcome flag
+  // (applyMatch safely skips flag-less rows) rather than crown the wrong rival.
+  const idx = targetLabel ? hypotheses.findIndex((h) => h.label === targetLabel) : -1;
+  const found = idx >= 0;
+  hypotheses.forEach((h, i) => (h.isOutcome = found && i === idx));
+  const outcomeProbability = found ? hypotheses[idx]!.probability : null;
   let leaderIdx = 0;
   for (let i = 1; i < hypotheses.length; i++) if (hypotheses[i]!.probability > hypotheses[leaderIdx]!.probability) leaderIdx = i;
-  const leaderIsOutcome = leaderIdx === idx;
+  const leaderIsOutcome = found && leaderIdx === idx;
 
   // Persist the distribution as a NON-DESTRUCTIVE analytical overlay. We do NOT
   // overwrite the node's signal-accumulated probability — a one-shot ACH read

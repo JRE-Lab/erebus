@@ -12,6 +12,7 @@ import {
   fetchContinuousRoam,
   setContinuousRoam,
   fetchCalibration,
+  runGenesis,
   type AutonomousState,
   type CalibrationStats,
 } from "@/lib/api";
@@ -19,6 +20,7 @@ import { ForecastTree } from "@/components/ForecastTree";
 import { NodeDetail } from "@/components/NodeDetail";
 import { SignalFeed } from "@/components/SignalFeed";
 import { Composer } from "@/components/Composer";
+import { AlertsBell } from "@/components/AlertsBell";
 
 // fetchTree may return TreeNode[] (nested) or a flat NodeRow[]. Flatten either
 // to a flat list — ForecastTree nests by parentId itself.
@@ -64,6 +66,8 @@ export default function ExplorerPage() {
   const [contBusy, setContBusy] = useState(false);
   // real-world calibration (Brier over externally-resolved forecasts)
   const [cal, setCal] = useState<CalibrationStats | null>(null);
+  // genesis: EREBUS births new root theories from the signal stream
+  const [genesisBusy, setGenesisBusy] = useState<null | "light" | "dark">(null);
 
   const load = useCallback(async () => {
     try {
@@ -151,6 +155,30 @@ export default function ExplorerPage() {
     }
   };
 
+  const genesis = async (dark: boolean) => {
+    setGenesisBusy(dark ? "dark" : "light");
+    setRoamNote(null);
+    try {
+      const r = await runGenesis(dark, 2);
+      if (r.offline) setRoamNote("Genesis ran offline — no theories born (LLM unavailable/paused).");
+      else if (!r.created.length) setRoamNote("Genesis found nothing new worth theorizing.");
+      else
+        setRoamNote(
+          `${dark ? "⚡ Dark genesis" : "✦ Genesis"} → ${r.created.length} new theor${r.created.length === 1 ? "y" : "ies"}: ${r.created.map((t) => t.id).join(", ")}`
+        );
+      await load();
+      await loadAuto();
+      if (r.created[0]) {
+        setPrimary(r.created[0].id);
+        setSelectedIds([r.created[0].id]);
+      }
+    } catch {
+      setRoamNote("Genesis failed.");
+    } finally {
+      setGenesisBusy(null);
+    }
+  };
+
   const roamOnce = async () => {
     setRoaming(true);
     setRoamNote(null);
@@ -217,6 +245,7 @@ export default function ExplorerPage() {
   const greens = useMemo(() => nodes.filter((n) => GREEN.has(n.state)).length, [nodes]);
   const launchPoints = useMemo(() => nodes.filter((n) => n.isLaunchPoint).length, [nodes]);
   const erebusNodes = useMemo(() => nodes.filter((n) => n.origin === "erebus").length, [nodes]);
+  const darkNodes = useMemo(() => nodes.filter((n) => n.origin === "shadow").length, [nodes]);
 
   // roots = theories (no parent, or parent not loaded)
   const roots = useMemo(() => {
@@ -318,7 +347,19 @@ export default function ExplorerPage() {
                 }}
               >
                 <div className="mb-1 flex items-center justify-between gap-2">
-                  <span className="nx-mono text-[10px] text-nx-text-muted">{r.id}</span>
+                  <span className="nx-mono text-[10px] text-nx-text-muted">
+                    {r.origin === "shadow" && (
+                      <span title="dark theory" style={{ color: "#a855f7" }}>
+                        ⚡{" "}
+                      </span>
+                    )}
+                    {r.origin === "erebus" && (
+                      <span title="EREBUS-made" style={{ color: "var(--nx-amber)" }}>
+                        ✦{" "}
+                      </span>
+                    )}
+                    {r.id}
+                  </span>
                   <span
                     className="nx-dot"
                     style={{ background: STATE_COLORS[r.state as NodeState] ?? STATE_COLORS.speculative }}
@@ -353,6 +394,7 @@ export default function ExplorerPage() {
             <Stat label="greens" value={greensShown} accent="var(--nx-green)" glow />
             <Stat label="launch points" value={launchShown} accent="var(--nx-green)" />
             <Stat label="erebus-made" value={erebusShown} accent="var(--nx-amber)" />
+            <Stat label="dark" value={darkNodes} accent="#a855f7" />
             {cal && cal.resolved > 0 && cal.meanBrier != null && (
               <div className="flex items-baseline gap-1.5" title={`${cal.resolved} forecasts resolved against external truth`}>
                 <span
@@ -389,6 +431,12 @@ export default function ExplorerPage() {
               <button className="nx-btn" disabled={ingesting} onClick={runIngest}>
                 {ingesting ? "Running…" : "Run ingest"}
               </button>
+              <AlertsBell
+                onJump={(id) => {
+                  setPrimary(id);
+                  setSelectedIds([id]);
+                }}
+              />
             </div>
           </div>
 
@@ -434,6 +482,28 @@ export default function ExplorerPage() {
               title="Have EREBUS pick a branch and expand it once"
             >
               {roaming ? "Roaming…" : "Roam once ▸"}
+            </button>
+
+            {/* genesis: birth NEW root theories from the signal stream */}
+            <button
+              type="button"
+              className="nx-btn"
+              disabled={genesisBusy !== null}
+              onClick={() => genesis(false)}
+              title="EREBUS reads the signal stream and births new root theories"
+              style={{ borderColor: "var(--nx-amber)", color: "var(--nx-amber)" }}
+            >
+              {genesisBusy === "light" ? "Theorizing…" : "✦ Genesis"}
+            </button>
+            <button
+              type="button"
+              className="nx-btn"
+              disabled={genesisBusy !== null}
+              onClick={() => genesis(true)}
+              title="The shadow layer: hidden agendas, cui bono, cover narratives — falsifiable dark theories"
+              style={{ borderColor: "#a855f7", color: "#a855f7" }}
+            >
+              {genesisBusy === "dark" ? "Descending…" : "⚡ Dark genesis"}
             </button>
 
             {/* continuous roam: keep branching back-to-back */}

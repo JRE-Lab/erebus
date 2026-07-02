@@ -7,3 +7,5 @@ export { stateFromConfirmation, applyMatch, applyStability, setProbability, THRE
 export { resolveDueNodes, adjudicate, calibrationScore, calibrationStats } from "./scoring.js";
 export { runACH } from "./ach.js";
 export type { Hypothesis, AchResult } from "./ach.js";
+export { generateRootTheories } from "./genesis.js";
+export type { GenesisResult } from "./genesis.js";

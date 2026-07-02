@@ -318,6 +318,7 @@ export const gameRead = (id: string) =>
 export interface Hypothesis {
   label: string;
   probability: number;
+  isOutcome?: boolean;
 }
 export interface AchResult {
   hypotheses: Hypothesis[];
@@ -334,6 +335,38 @@ export const resolveNode = (id: string, happened: boolean) =>
   put<{ resolved: true; outcome: boolean; brier: number }>(`/nodes/${encodeURIComponent(id)}/resolve`, {
     happened,
   });
+
+// Genesis — EREBUS births new root theories from the signal stream.
+export interface GenesisResult {
+  created: Array<{ id: string; question: string; dark: boolean }>;
+  cost: number;
+  offline: boolean;
+}
+export const runGenesis = (dark: boolean, count = 2) =>
+  post<GenesisResult>("/genesis", { dark, count });
+
+// Alerts — greened / tipping / contradicted / tripwire / newborn theories.
+export interface AlertRow {
+  id: string;
+  kind: string;
+  nodeId: string | null;
+  title: string;
+  detail: string | null;
+  createdAt: string;
+  seenAt: string | null;
+}
+export const fetchAlerts = (limit = 40) =>
+  req<{ alerts: AlertRow[]; unseen: number }>(`/alerts?limit=${limit}`);
+export const markAlertsSeen = () => put<{ ok: boolean }>("/alerts/seen");
+
+// Operating hours (worker autonomous window, UTC).
+export interface OperatingHours {
+  on: boolean;
+  startHour: number;
+  endHour: number;
+}
+export const fetchHours = () => req<OperatingHours>("/hours");
+export const setHours = (h: OperatingHours) => put<OperatingHours>("/hours", h);
 
 // Real-world calibration.
 export interface CalibrationStats {
