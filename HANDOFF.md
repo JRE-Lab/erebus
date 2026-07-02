@@ -25,7 +25,7 @@ content.
 - **DB:** Postgres 16 + pgvector (VECTOR 1536). Drizzle ORM. Migrations in `packages/db/drizzle` applied by `pnpm --filter @erebus/db migrate` (NOT automatic at boot — run on deploy).
 - **API:** Hono mounted **inside Next 15** at `/api` (`apps/web/app/api/[[...route]]/route.ts`) — one web container serves UI + API.
 - **Worker:** `apps/worker` — autonomous scheduler (`src/scheduler.ts`) running ingest/rematch/cycle/garden/worldview/market on timers + the continuous-roam loop.
-- **LLM:** multi-provider (`packages/agents/src/client.ts`). `LLM_PROVIDER=auto` → **Anthropic first** (Opus `claude-opus-4-8`, Sonnet `claude-sonnet-4-6`), falls back to **OpenAI** (`gpt-4o`/`gpt-4o-mini`) on any error. Every call is pause-guarded and cost-logged to `exploration_jobs`.
+- **LLM:** multi-provider (`packages/agents/src/client.ts`). `LLM_PROVIDER=auto` → **Anthropic first**, falls back to **OpenAI** (`gpt-4o`/`gpt-4o-mini`) on any error. **Tiers: deep = `claude-fable-5`** (genesis, dark genesis, game reads, ACH, expansion — Anthropic's most capable model, $10/$50 per MTok) **, fast = `claude-haiku-4-5`** (matching, directions, verification — $1/$5). Fable runs through the beta endpoint with a **server-side refusal fallback to Opus 4.8**; a whole-chain refusal throws so the OpenAI fallback still applies. No thinking/sampling params are sent (Fable requires omission). Costs are ledgered against the *served* model with prefix-match pricing. Every call is pause-guarded and cost-logged to `exploration_jobs`. Change tiers any time via `OPUS_MODEL`/`SONNET_MODEL` in `/opt/erebus/.env` + restart.
 - **Embeddings:** `EMBEDDING_PROVIDER=openai` on the VPS (`text-embedding-3-small`, 1536); deterministic offline fallback exists.
 
 ### Packages
