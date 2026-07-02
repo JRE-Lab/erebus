@@ -13,6 +13,7 @@ import {
   setContinuousRoam,
   fetchCalibration,
   runGenesis,
+  verifyResolutions,
   type AutonomousState,
   type CalibrationStats,
 } from "@/lib/api";
@@ -68,6 +69,8 @@ export default function ExplorerPage() {
   const [cal, setCal] = useState<CalibrationStats | null>(null);
   // genesis: EREBUS births new root theories from the signal stream
   const [genesisBusy, setGenesisBusy] = useState<null | "light" | "dark">(null);
+  // source-verified resolution sweep
+  const [verifying, setVerifying] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -176,6 +179,25 @@ export default function ExplorerPage() {
       setRoamNote("Genesis failed.");
     } finally {
       setGenesisBusy(null);
+    }
+  };
+
+  const verify = async () => {
+    setVerifying(true);
+    setRoamNote(null);
+    try {
+      const r = await verifyResolutions(20);
+      setRoamNote(
+        r.due === 0 && r.audited === 0
+          ? "Nothing due for resolution and nothing resolved to audit."
+          : `✓ Verified: ${r.checked}/${r.due} due judged · ${r.resolved} resolved · ${r.unclear} unclear (yours to call) · ${r.audited} audited${r.disputed ? ` · ${r.disputed} DISPUTED` : ""}`
+      );
+      await load();
+      await loadAuto();
+    } catch {
+      setRoamNote("Resolution verification failed.");
+    } finally {
+      setVerifying(false);
     }
   };
 
@@ -504,6 +526,18 @@ export default function ExplorerPage() {
               style={{ borderColor: "#a855f7", color: "#a855f7" }}
             >
               {genesisBusy === "dark" ? "Descending…" : "⚡ Dark genesis"}
+            </button>
+
+            {/* source-verified resolution sweep across all due theories */}
+            <button
+              type="button"
+              className="nx-btn"
+              disabled={verifying}
+              onClick={verify}
+              title="Judge every due theory from its cited sources: auto-resolve confident verdicts, audit past resolutions, flag disputes"
+              style={{ borderColor: "var(--nx-green)", color: "var(--nx-green)" }}
+            >
+              {verifying ? "Verifying…" : "✓ Verify resolutions"}
             </button>
 
             {/* continuous roam: keep branching back-to-back */}

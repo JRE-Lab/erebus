@@ -13,7 +13,7 @@
 // ============================================================================
 import { sql, desc } from "drizzle-orm";
 import { db, nodes, worldviewSnapshots, recordEvent, getSetting, isPaused } from "@erebus/db";
-import { listNodes, calibrationScore, roamOnce, generateRootTheories } from "@erebus/core";
+import { listNodes, calibrationScore, roamOnce, generateRootTheories, verifyResolutions } from "@erebus/core";
 import { ingestAll, rematchRecent, matchNode } from "@erebus/ingest";
 import { runAlerts } from "./alerts.js";
 import { runGardener } from "@erebus/gardener";
@@ -222,6 +222,16 @@ export function startScheduler(): SchedulerHandle {
   const alertsEvery = minutes("ALERTS_EVERY_MIN", 10);
   const alertsTick = guarded("alerts", () => runAlerts(), "none");
 
+  // Resolution verification: source-verified judge sweeps due theories and
+  // audits recent resolutions (twice daily; Sonnet-cheap, budget-gated).
+  const verifyEvery = minutes("VERIFY_EVERY_MIN", 720);
+  const verifyTick = guarded("verify", async () => {
+    const a = await getSetting<{ enabled: boolean }>("autonomous", { enabled: true });
+    if (!a.enabled) return { skipped: "autonomous paused" };
+    if (!(await withinDailyBudget())) return { skipped: "daily budget" };
+    return verifyResolutions({ limit: 20 });
+  });
+
   const timers: NodeJS.Timeout[] = [
     setInterval(ingestTick, ingestEvery * MIN),
     setInterval(rematchTick, rematchEvery * MIN),
@@ -231,6 +241,7 @@ export function startScheduler(): SchedulerHandle {
     setInterval(marketTick, marketEvery * MIN),
     setInterval(genesisTick, genesisEvery * MIN),
     setInterval(alertsTick, alertsEvery * MIN),
+    setInterval(verifyTick, verifyEvery * MIN),
   ];
 
   // --- continuous roam: branch back-to-back while enabled --------------------

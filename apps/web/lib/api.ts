@@ -368,6 +368,19 @@ export interface OperatingHours {
 export const fetchHours = () => req<OperatingHours>("/hours");
 export const setHours = (h: OperatingHours) => put<OperatingHours>("/hours", h);
 
+// Source-verified resolution sweep.
+export interface VerifyResult {
+  due: number;
+  checked: number;
+  resolved: number;
+  unclear: number;
+  audited: number;
+  disputed: number;
+  cost: number;
+}
+export const verifyResolutions = (limit = 20) =>
+  post<VerifyResult>("/verify-resolutions", { limit });
+
 // Real-world calibration.
 export interface CalibrationStats {
   resolved: number;

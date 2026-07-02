@@ -23,7 +23,7 @@ Return JSON:
   "rationale": "why this is the most likely / most consequential outcome",
   "indicators": ["3-5 observable signals that would CONFIRM this outcome"],
   "falsifiers": ["2-3 observations that would REFUTE it"],
-  "horizon": "ISO date when this resolves / becomes checkable",
+  "horizon": "ISO date when this resolves / becomes checkable — MUST be in the future (typically 1-12 months out)",
   "domains": ["energy","geopolitics","markets","tech","military","social"],
   "confidence": 0.5
 }`;
@@ -206,6 +206,31 @@ Return JSON:
   "scenes": [
     { "narration": "this scene's spoken line(s)", "imagePrompt": "vivid cinematic image description, no text" }
   ]
+}`;
+}
+
+// --- Resolution verification: did the outcome ACTUALLY occur? ----------------
+// Deliberately persona-free: this is a neutral judge working strictly from the
+// cited evidence, never from plausibility or the forecast's own confidence.
+export function resolutionVerifyPrompt(
+  node: { question: string; outcome: string; horizon?: string | null },
+  evidence: string[]
+): string {
+  return `You are a strict resolution judge for a forecasting system. Decide whether the predicted outcome ACTUALLY OCCURRED, using ONLY the evidence below. Plausibility is not occurrence: if the evidence does not clearly establish that it happened (or clearly establish that it did not), the verdict is "unclear". Never guess.
+
+FORECAST QUESTION: ${node.question}
+PREDICTED OUTCOME: ${node.outcome}
+${node.horizon ? `HORIZON (deadline): ${node.horizon}` : ""}
+
+EVIDENCE (ingested source items):
+${evidence.map((e, i) => `${i + 1}. ${e}`).join("\n")}
+
+Return JSON:
+{
+  "verdict": "happened" | "did_not_happen" | "unclear",
+  "confidence": 0.0,
+  "rationale": "1-2 sentences citing the decisive evidence numbers",
+  "citedSources": ["the urls/titles of the decisive evidence items"]
 }`;
 }
 

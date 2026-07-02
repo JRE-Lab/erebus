@@ -9,3 +9,5 @@ export { runACH } from "./ach.js";
 export type { Hypothesis, AchResult } from "./ach.js";
 export { generateRootTheories } from "./genesis.js";
 export type { GenesisResult } from "./genesis.js";
+export { verifyResolutions } from "./verify.js";
+export type { VerifyResult } from "./verify.js";

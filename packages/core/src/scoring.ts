@@ -18,11 +18,12 @@ export async function resolveDueNodes(): Promise<{ resolved: number; due: number
 }
 
 // The real resolver: reality says the forecast happened (or didn't). Scores Brier
-// against the probability the node held at resolution. source = market | operator.
+// against the probability the node held at resolution.
+// source = market (realized moves) | operator (human) | verifier (source-verified LLM judge).
 export async function adjudicate(
   nodeId: string,
   happened: boolean,
-  source: "market" | "operator" = "operator"
+  source: "market" | "operator" | "verifier" = "operator"
 ): Promise<{ resolved: true; outcome: boolean; brier: number } | null> {
   const [node] = await db.select().from(nodes).where(eq(nodes.id, nodeId)).limit(1);
   if (!node) return null;

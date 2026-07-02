@@ -23,6 +23,7 @@ import {
   adjudicate,
   calibrationStats,
   generateRootTheories,
+  verifyResolutions,
 } from "@erebus/core";
 import {
   db,
@@ -314,6 +315,16 @@ app.put("/nodes/:id/resolve", (c) =>
 
 // GET /api/calibration -> real-world accuracy: resolved count, mean Brier, base rate.
 app.get("/calibration", (c) => guard(c, async () => c.json(await calibrationStats())));
+
+// POST /api/verify-resolutions { limit? } -> source-verified resolution sweep:
+// judge every due theory from its cited evidence, auto-resolve confident
+// verdicts, audit recent resolutions and flag disputes.
+app.post("/verify-resolutions", (c) =>
+  guard(c, async () => {
+    const body = await c.req.json().catch(() => ({}));
+    return c.json(await verifyResolutions({ limit: Number(body?.limit) || 20 }));
+  })
+);
 
 // POST /api/synthesize { ids } -> combine N branches into a new node.
 app.post("/synthesize", (c) =>

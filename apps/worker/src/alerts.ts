@@ -84,6 +84,12 @@ export async function runAlerts(): Promise<{ scanned: number; alerts: number }> 
         nodeId: e.nodeId,
         title: after.dark ? `⚡ dark theory born: ${e.nodeId}` : `✦ new theory born: ${e.nodeId}`,
       });
+    } else if (e.kind === "resolution_disputed") {
+      drafts.push({
+        kind: "disputed",
+        nodeId: e.nodeId,
+        title: `${e.nodeId} resolution DISPUTED — sources contradict the stored outcome`,
+      });
     }
   }
 

@@ -15,6 +15,7 @@ const KIND_COLOR: Record<string, string> = {
   fragile: "#a855f7",
   genesis: "var(--nx-amber)",
   dark_genesis: "#a855f7",
+  disputed: "var(--nx-red)",
 };
 
 export function AlertsBell({ onJump }: { onJump?: (nodeId: string) => void }) {
