@@ -7,6 +7,9 @@
 //                  amplifying; resolved from the transition log.
 //   market_move  — direction/magnitude on the top exposed instrument over 7
 //                  calendar days; resolved on adjusted closes.
+// Phase 5: priors come from regime-matched ANALOGS when enough precedents
+// exist; otherwise the hand-set prior stands and the row records that it was
+// uninformative, so the card can say so rather than implying evidence.
 // preposition claims + contract_odds (Kalshi) are v2 (documented).
 // R6: the scoreboard compares each head's rolling Brier to the climatological
 // base rate; a losing head is marked advisory.
@@ -15,10 +18,15 @@ import { sql } from "drizzle-orm";
 import { db, loomForecasts, loomResolutions } from "@erebus/db";
 import { narrativeInstruments } from "./entities.js";
 import { priceSeries } from "./pricing.js";
+import { lifecyclePrior, marketPrior, buildAnalogs } from "./analogs.js";
 
 const LIFECYCLE_PRIOR = Number(process.env.LOOM_LIFECYCLE_PRIOR || 0.45);
 const MARKET_PRIOR = Number(process.env.LOOM_MARKET_PRIOR || 0.55);
 const MODEL_VER = "loom-phase4-mvp-1";
+// The market claim's magnitude, declared once so issuance, the analog prior,
+// and resolution all price the SAME event.
+const MAGNITUDE_BAND = process.env.LOOM_MAGNITUDE_BAND || "1-3%";
+const MIN_MAGNITUDE = Number(MAGNITUDE_BAND.match(/([\d.]+)/)?.[1] ?? 1) / 100;
 
 // Postgres timestamptz columns arrive as JS Date objects through node-postgres
 // unless selected ::text. Normalize either shape to an ISO calendar day.
@@ -40,6 +48,11 @@ export interface LoomForecastResult { lifecycle: number; market: number }
 export async function issueForecasts(): Promise<LoomForecastResult> {
   const r: LoomForecastResult = { lifecycle: 0, market: 0 };
   const regime = await currentRegime();
+  // Analogs are refreshed in the 6h market pass, but forecasts are issued on
+  // the HOURLY transition — so a narrative amplifying for the first time would
+  // always find an empty analog set and permanently fall back, no matter how
+  // large the corpus grew. Refresh the freshest narratives here first.
+  await buildAnalogs(5).catch(() => ({}));
 
   // Lifecycle head: amplifying transitions with no claim covering THAT
   // transition. The lookback is generous (a missed pass must not silently drop
@@ -64,13 +77,21 @@ export async function issueForecasts(): Promise<LoomForecastResult> {
     // a delayed pass would otherwise shift the window and could resolve a claim
     // false for a peak that happened inside the real window.
     const at = new Date(row.at as string);
+    const prior = await lifecyclePrior(row.narrative_id as string, 72, LIFECYCLE_PRIOR);
     await db.insert(loomForecasts).values({
       narrativeId: row.narrative_id as string,
       claimType: "lifecycle",
-      targetRef: { toState: "peak", withinHours: 72, transitionId: row.transition_id as string },
+      targetRef: {
+        toState: "peak",
+        withinHours: 72,
+        transitionId: row.transition_id as string,
+        priorBasis: prior.basis,
+        priorInformative: prior.informative,
+        analogN: prior.n,
+      },
       windowStart: at,
       windowEnd: new Date(at.getTime() + 72 * 3600_000),
-      prob: LIFECYCLE_PRIOR,
+      prob: prior.prob,
       regimeAtIssue: regime,
       modelVer: MODEL_VER,
     });
@@ -107,16 +128,36 @@ export async function issueForecasts(): Promise<LoomForecastResult> {
           LIMIT 1
         `);
         const sig = Number((dir as unknown as { rows: Array<{ sig: unknown }> }).rows[0]?.sig ?? 0);
-        const direction = sig >= 0 ? "up" : "down";
+        // DIRECTION comes from this narrative's own observed abnormal return —
+        // the most relevant measurement on the actual instrument. Precedents
+        // then price THAT declared direction; letting the analogs pick the side
+        // and report its own frequency is post-selection bias.
+        const direction: "up" | "down" = sig >= 0 ? "up" : "down";
+        const minMag = MIN_MAGNITUDE;
+        const mp = await marketPrior(
+          row.narrative_id,
+          inst.symbol,
+          direction,
+          minMag,
+          7,
+          regime === "risk_off" ? Math.max(0.5, MARKET_PRIOR - 0.05) : MARKET_PRIOR
+        );
         await db.insert(loomForecasts).values({
           narrativeId: row.narrative_id,
           claimType: "market_move",
-          targetRef: { instrument: inst.symbol, instrumentId: inst.instrumentId },
+          targetRef: {
+            instrument: inst.symbol,
+            instrumentId: inst.instrumentId,
+            priorBasis: mp.basis,
+            priorInformative: mp.informative,
+            analogN: mp.n,
+            observedSignal: sig,
+          },
           direction,
-          magnitudeBand: "1-3%",
+          magnitudeBand: MAGNITUDE_BAND,
           windowStart: new Date(),
           windowEnd: new Date(Date.now() + 7 * 86_400_000),
-          prob: regime === "risk_off" ? Math.max(0.5, MARKET_PRIOR - 0.05) : MARKET_PRIOR,
+          prob: mp.prob,
           regimeAtIssue: regime,
           modelVer: MODEL_VER,
         });
@@ -174,7 +215,7 @@ export async function resolveLoomForecasts(): Promise<LoomResolveResult> {
         const endBar = series.filter((p) => p.date <= endDate).at(-1);
         if (startBar && endBar && endBar.date > startBar.date) {
           const move = endBar.close / startBar.close - 1;
-          const minMag = Number(String(f.magnitude_band ?? "1-3%").match(/([\d.]+)/)?.[1] ?? 1) / 100;
+          const minMag = Number(String(f.magnitude_band ?? MAGNITUDE_BAND).match(/([\d.]+)/)?.[1] ?? 1) / 100;
           outcome = (f.direction === "up" ? move : -move) >= minMag;
         }
         // else: prices not caught up yet — leave pending, retried tomorrow

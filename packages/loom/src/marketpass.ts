@@ -11,6 +11,9 @@ import { refreshLoomPrices } from "./pricing.js";
 import { computePositioning, computeInsiderProxy, computeRegimes, runPlacebo, flagPrepositions } from "./positioning.js";
 import { runEventStudies } from "./events.js";
 import { resolveLoomForecasts } from "./forecasts.js";
+import { buildAnalogs } from "./analogs.js";
+import { runSourceGraph } from "./sourcegraph.js";
+import { decayPlaybooks } from "./playbooks.js";
 
 const LOCK_KEY = 427002;
 
@@ -24,6 +27,11 @@ export interface LoomMarketPassResult {
   placeboThin: string[]; // regimes with too little history to build a null yet
   flags: number;
   forecastsResolved: number;
+  // Phase 5
+  analogs: number;
+  outletPriors: number;
+  negativeSpace: number;
+  playbooksDecayed: number;
   errors: string[];
   skipped?: string;
 }
@@ -31,7 +39,8 @@ export interface LoomMarketPassResult {
 export async function runLoomMarketPass(): Promise<LoomMarketPassResult> {
   const r: LoomMarketPassResult = {
     prices: 0, positioningRows: 0, insiderScored: 0, regimeDays: 0,
-    eventStudies: 0, placeboRegimes: 0, placeboThin: [], flags: 0, forecastsResolved: 0, errors: [],
+    eventStudies: 0, placeboRegimes: 0, placeboThin: [], flags: 0, forecastsResolved: 0,
+    analogs: 0, outletPriors: 0, negativeSpace: 0, playbooksDecayed: 0, errors: [],
   };
   const client = await pool.connect();
   try {
@@ -64,6 +73,17 @@ export async function runLoomMarketPass(): Promise<LoomMarketPassResult> {
       }
 
       r.flags = (await flagPrepositions()).flagged;
+
+      // Phase 5: analogs must be built BEFORE resolution/issuance reads them,
+      // and the source graph feeds the negative-space + provenance sections.
+      const an = await buildAnalogs();
+      r.analogs = an.analogsWritten;
+      const sg = await runSourceGraph();
+      r.outletPriors = sg.priorsComputed;
+      r.negativeSpace = sg.asymmetries + sg.displacements;
+      const pd = await decayPlaybooks();
+      r.playbooksDecayed = pd.decayed;
+
       r.forecastsResolved = (await resolveLoomForecasts()).resolved;
       return r;
     } finally {

@@ -6,6 +6,8 @@
 // ============================================================================
 import { sql } from "drizzle-orm";
 import { db } from "@erebus/db";
+import { narrativeAnalogs } from "./analogs.js";
+import { narrativeSourcePriors, narrativeNegativeSpace } from "./sourcegraph.js";
 
 export interface LoomNarrativeCard {
   id: string;
@@ -80,7 +82,12 @@ export interface LoomNarrativeDetail extends LoomNarrativeCard {
     id: string; claimType: string; direction: string | null; magnitudeBand: string | null;
     target: unknown; prob: number; windowEnd: string; issuedAt: string;
     outcome: boolean | null; brier: number | null;
+    priorBasis: string | null; priorInformative: boolean | null;
   }>;
+  // Phase 5
+  analogs: Array<{ id: string; label: string | null; sim: number; regimeMatch: boolean; outcome: unknown }>;
+  sourcePriors: Array<{ domain: string; country: string | null; narratives: number | null; firstMoverRate: number | null; wireDependence: number | null; avgLeadHours: number | null }>;
+  negativeSpace: Array<{ kind: string; z: number; detail: unknown; at: string }>;
 }
 
 const H_LABELS: Record<string, string> = {
@@ -180,6 +187,11 @@ export async function getLoomNarrative(id: string): Promise<LoomNarrativeDetail 
     `),
   ]);
   const jRow = (judgment as unknown as Rows).rows[0];
+  const [analogs, sourcePriors, negativeSpace] = await Promise.all([
+    narrativeAnalogs(id),
+    narrativeSourcePriors(id),
+    narrativeNegativeSpace(id),
+  ]);
 
   return {
     ...cardOf(row),
@@ -265,7 +277,12 @@ export async function getLoomNarrative(id: string): Promise<LoomNarrativeDetail 
       issuedAt: f.issued_at as string,
       outcome: f.outcome == null ? null : Boolean(f.outcome),
       brier: f.brier == null ? null : Number(f.brier),
+      priorBasis: ((f.target_ref as { priorBasis?: string })?.priorBasis) ?? null,
+      priorInformative: ((f.target_ref as { priorInformative?: boolean })?.priorInformative) ?? null,
     })),
+    analogs,
+    sourcePriors,
+    negativeSpace,
   };
 }
 

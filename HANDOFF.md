@@ -29,7 +29,7 @@ content.
 - **Embeddings:** `EMBEDDING_PROVIDER=openai` on the VPS (`text-embedding-3-small`, 1536); deterministic offline fallback exists.
 
 ### Packages
-`db` (schema/migrate/settings/embeddings/vector + **budget governor**) · `agents` (LLM client + prompts + debate) · `core` (tree ops, greening state machine, autonomy/roam, scoring, verify) · `ingest` (RSS + signal↔node matching) · `market` (correlation) · `gametheory` (strategic layer) · `shadowboard` (deception) · `gardener` (prune/merge) · `evals` · `content` (profit engine) · **`loom` (narrative intelligence, Phases 0-4)**. Apps: `web`, `worker`.
+`db` (schema/migrate/settings/embeddings/vector + **budget governor**) · `agents` (LLM client + prompts + debate) · `core` (tree ops, greening state machine, autonomy/roam, scoring, verify) · `ingest` (RSS + signal↔node matching) · `market` (correlation) · `gametheory` (strategic layer) · `shadowboard` (deception) · `gardener` (prune/merge) · `evals` · `content` (profit engine) · **`loom` (narrative intelligence, Phases 0-5)**. Apps: `web`, `worker`.
 
 ---
 
@@ -86,7 +86,12 @@ Deception/tradecraft read; can spawn a contested counter-forecast — now **conn
   - **M11 forecasts:** append-only pre-registration (R3) of `lifecycle` / `market_move` / `playbook_match` claims, each stamped with regime + model version, windows keyed on the observed transition (R1); daily resolution → Brier; `GET /api/loom/scoreboard` compares each head's rolling Brier to its climatology and marks losers **advisory**, which the card renders instead of green/red chips (R6).
   - **M9 playbooks (pilot):** `POST /api/loom/playbooks {theoryRef}` runs a deep-tier red-team pass turning an EREBUS theory into machine-matchable campaign watch-patterns; matches are pre-registered and scored. Idempotent per theory.
   - API: `POST /api/loom/market`, `GET /api/loom/scoreboard`, `POST /api/loom/playbooks`. UI: the full spec-M12 card (frame chips, origin trace, intent with runner-up + falsifiers, exposure + CARs, placebo-controlled flags, forecast status strip).
-  - Phase 5 (v2, not built): analog backfill + matcher, options-flow detectors (vendor), social velocity, negative-space displacement, journalist/ownership graph.
+  - **Phase 5 (migration 0011):** the free half of the spec's v2 tier, folded into the same two passes.
+    - **M7 analogs** (`analogs.ts`): the empirical prior. Precedents come from LOOM's OWN history (the spec's GDELT backfill needs a GCP project), matched by centroid cosine in `[0.55, 0.85]` — the ceiling matters because anything above the cluster threshold is the SAME story, not a precedent. **An analog prior must measure exactly the claim it prices:** the lifecycle prior counts amplifying→peak within 72h (the resolution predicate itself, not time since the first article), and the market prior counts the raw N-day move on the SAME instrument in a direction declared from the target's own signal — choosing the analogs' majority side and reporting its frequency makes a coin flip read 63%. Below `LOOM_ANALOG_MIN` (5) regime-matched precedents the hand-set prior stands and the card says so.
+    - **M4 source graph** (`sourcegraph.ts`): first-mover rate, wire dependence, and lead time per outlet. Ordering uses **claimed publish time**, never `first_seen_at` — our poll stamps every article of an ingest pass milliseconds apart in feed order, so ranking by it measured our own feed list. A narrative only counts when the winner's lead beats `LOOM_LEAD_MIN_GAP_MIN`; rates need `LOOM_PRIOR_MIN_N` narratives before they render, and an outlet with no prior shows "no prior yet", not 0%.
+    - **M10 negative space:** coverage asymmetry vs a **leave-one-out** country baseline (including a story in its own expectation lets it define the norm it's judged against) and displacement (falling faster than its own trend *while corpus attention holds up*). One row per (narrative, kind), upserted.
+    - **M9 automation:** playbook confidence is settled by **resolved** playbook_match outcomes, not match volume (paying out on match count selects for the spammiest patterns); matching requires whole-word hits on ≥4-char terms; time decay is bounded so one long gap can't wipe the library; retired playbooks stop matching but don't consume the per-theory generation cap.
+    - Still unbuilt (need paid vendors): options-flow detectors (`oi_jump`/`pc_skew`/`iv_pctl`, spec Q1 ~$75-150/mo) and social velocity. GDELT backfill needs a GCP project.
 
 ### Cost control
 - **Pause kill-switch** (`settings.paused`, header button): instant full stop on ALL paid calls (LLM + embeddings + images).
@@ -124,8 +129,9 @@ Anthropic key installed 2026-08-24 (Fable 5 deep tier verified live). ⚠️ Rot
 ## 5. Roadmap (designed, not yet built)
 
 From the game-theory design panel + subsystem audit + LOOM spec, in priority order:
-- **LOOM Phase 5 (v2)** — analog backfill + matcher (the empirical prior for predicted reactions), playbook automation, negative-space displacement, source-graph behavioral priors, options-flow detectors (vendor, ~$75-150/mo), social velocity.
-- **LOOM calibration** — the forecast heads currently run hand-set priors; R8 says no capital touches a LOOM signal until a head completes a 90-day cycle beating its base rate.
+- **LOOM calibration (the gate that matters)** — every forecast head still runs hand-set priors until the analog pool reaches `LOOM_ANALOG_MIN` regime-matched precedents, which needs corpus history. R6 pulls a losing head to advisory; R8 says no capital touches a LOOM signal until a head completes a 90-day cycle beating its base rate. That clock has not started.
+- **LOOM vendor-gated items** — options-flow detectors (spec Q1, ~$75-150/mo) and social velocity; GDELT GKG backfill (spec Q2) needs a GCP project.
+- **More feeds** — most Phase 5 statistics (first-mover, coverage asymmetry, analog depth) are gated on corpus breadth; 3 outlets is the binding constraint, not the code.
 - **Equilibrium-break & tripwire alerts** — a live rail that fires when a corroborated node destabilizes or a decision's tripwire greens.
 - **Value-of-Information ranker** — roam toward the most decision-relevant uncertainty, not the most-confirmed node.
 - **Position sizer** — fractional-Kelly read-only sizing for instrument-linked nodes (never auto-trade).

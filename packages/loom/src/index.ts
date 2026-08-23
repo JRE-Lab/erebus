@@ -16,6 +16,11 @@
 // Phase 4: intent (ACH + ICD 203 + R2 falsifiers), forecasts (R3 append-only),
 //   scoreboard (R6), playbook pilot (M9).
 //   - loomScoreboard(), generatePlaybooks(theoryRef)
+// Phase 5: analogs (M7, self-corpus — priors only when the precedent set is
+//   deep enough, else the hand-set prior stands and says so), source/actor
+//   behavioral priors (M4), negative space (M10 asymmetry + displacement),
+//   playbook confidence decay + retirement (M9 automation). Options-flow and
+//   social velocity remain unbuilt: both require paid vendors.
 // ============================================================================
 export { ingestLoom, loomStatus } from "./ingest.js";
 export type { LoomIngestResult, LoomStatus } from "./ingest.js";
@@ -31,5 +36,9 @@ export { runLoomMarketPass } from "./marketpass.js";
 export type { LoomMarketPassResult } from "./marketpass.js";
 export { loomScoreboard } from "./forecasts.js";
 export type { LoomHeadScore } from "./forecasts.js";
-export { generatePlaybooks } from "./playbooks.js";
+export { generatePlaybooks, decayPlaybooks } from "./playbooks.js";
 export type { PlaybookGenResult } from "./playbooks.js";
+export { buildAnalogs, lifecyclePrior, marketPrior, narrativeAnalogs } from "./analogs.js";
+export type { LoomAnalogResult, AnalogPrior } from "./analogs.js";
+export { runSourceGraph, narrativeSourcePriors, narrativeNegativeSpace } from "./sourcegraph.js";
+export type { LoomSourceGraphResult } from "./sourcegraph.js";

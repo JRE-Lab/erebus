@@ -626,6 +626,76 @@ export const loomPrepositionFlags = pgTable(
 );
 
 // ============================================================================
+// LOOM Phase 5 — analogs (M7), source/actor behavioral priors (M4), negative
+// space (M10), playbook automation (M9).
+// The spec builds M7 on a GDELT backfill; that arm needs a GCP project, so the
+// matcher here runs on LOOM's OWN accumulating narrative history instead. It
+// is cold at first and strengthens every day — and the min-analog rule below
+// means a thin precedent set falls back to the hand-set prior and SAYS SO
+// rather than inventing a confident number (spec risk: "analog overfit").
+// Options-flow detectors and social velocity stay unbuilt: both need paid
+// vendors (spec Q1), and there is no free substitute.
+// ============================================================================
+export const loomAnalogs = pgTable(
+  "loom_analogs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    narrativeId: uuid("narrative_id")
+      .notNull()
+      .references(() => loomNarratives.id, { onDelete: "cascade" }),
+    analogNarrativeId: uuid("analog_narrative_id")
+      .notNull()
+      .references(() => loomNarratives.id, { onDelete: "cascade" }),
+    sim: real("sim").notNull(), // centroid cosine
+    regimeMatch: boolean("regime_match").notNull().default(false),
+    outcomeSummary: jsonb("outcome_summary").notNull().default({}), // {reachedPeak,hoursToPeak,maxVel,carEvent}
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pairUq: uniqueIndex("loom_analogs_pair_uq").on(t.narrativeId, t.analogNarrativeId),
+    narrativeIdx: index("loom_analogs_narrative_idx").on(t.narrativeId),
+  })
+);
+
+// M4: behavioral priors per outlet, recomputed on a slow cadence. These are
+// statistics ABOUT AN OUTLET, never evidence about a specific story (R5/R7).
+export const loomOutletPriors = pgTable(
+  "loom_outlet_priors",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    outletId: uuid("outlet_id")
+      .notNull()
+      .references(() => loomOutlets.id, { onDelete: "cascade" }),
+    narratives: integer("narratives").notNull().default(0), // narratives this outlet appeared in
+    firstMoverRate: real("first_mover_rate").notNull().default(0), // share where it seeded
+    wireDependence: real("wire_dependence").notNull().default(0), // share of its articles matching wire copy
+    avgLeadHours: real("avg_lead_hours"), // mean hours ahead of the narrative's seed time
+    computedAt: timestamp("computed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ outletUq: uniqueIndex("loom_outlet_priors_outlet_uq").on(t.outletId) })
+);
+
+// M10: absence as signal. `kind` = asymmetry (coverage skew vs baseline) or
+// displacement (a narrative decaying faster than its fitted curve while
+// another surges).
+export const loomNegativeSpace = pgTable(
+  "loom_negative_space",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    narrativeId: uuid("narrative_id")
+      .notNull()
+      .references(() => loomNarratives.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(), // asymmetry|displacement
+    detail: jsonb("detail").notNull().default({}),
+    z: real("z").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  // One row per (narrative, kind): findings are refreshed, never appended —
+  // otherwise every pass adds another copy of the same signal to the card.
+  (t) => ({ narrativeKindUq: uniqueIndex("loom_negative_space_narrative_kind_uq").on(t.narrativeId, t.kind) })
+);
+
+// ============================================================================
 // LOOM Phase 4 — intent (M8), framing/coordination (M2 back-half), forecasts
 // + scoring (M11), playbooks (M9 pilot).
 // R2 is enforced in code at the single judgment write path AND at render:
@@ -763,6 +833,8 @@ export const loomPlaybooks = pgTable("loom_playbooks", {
   pattern: jsonb("pattern").notNull().default({}), // {themes[], actors[], framingSignature, sequencing}
   confidence: real("confidence").notNull().default(0.5), // decays on non-matches
   model: text("model"),
+  lastMatchedAt: timestamp("last_matched_at", { withTimezone: true }),
+  decayedAt: timestamp("decayed_at", { withTimezone: true }), // last confidence decay applied
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -831,5 +903,8 @@ export const schema = {
   loomResolutions,
   loomPlaybooks,
   loomPlaybookMatches,
+  loomAnalogs,
+  loomOutletPriors,
+  loomNegativeSpace,
   settings,
 };

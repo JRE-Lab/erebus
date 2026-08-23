@@ -59,7 +59,11 @@ interface Detail extends NarrativeCard {
   forecasts: Array<{
     id: string; claimType: string; direction: string | null; magnitudeBand: string | null;
     prob: number; windowEnd: string; outcome: boolean | null; brier: number | null;
+    priorBasis: string | null; priorInformative: boolean | null;
   }>;
+  analogs: Array<{ id: string; label: string | null; sim: number; regimeMatch: boolean; outcome: unknown }>;
+  sourcePriors: Array<{ domain: string; country: string | null; narratives: number | null; firstMoverRate: number | null; wireDependence: number | null; avgLeadHours: number | null }>;
+  negativeSpace: Array<{ kind: string; z: number; detail: unknown; at: string }>;
 }
 
 const STATE_META: Record<string, { color: string; hint: string }> = {
@@ -409,6 +413,16 @@ export default function NarrativesPage() {
                       {f.brier != null && !advisory && (
                         <span style={{ color: "var(--nx-text-muted)" }}> · brier {f.brier.toFixed(3)}</span>
                       )}
+                      <span
+                        style={{ color: f.priorInformative ? "var(--nx-text-muted)" : "#a16207" }}
+                        title={
+                          f.priorInformative
+                            ? "probability estimated from regime-matched precedents"
+                            : "no usable precedent set — hand-set prior, treat as uninformative"
+                        }
+                      >
+                        {" "}· {f.priorBasis ?? "hand-set prior (no precedent record)"}
+                      </span>
                     </span>
                   </div>
                 );
@@ -423,6 +437,83 @@ export default function NarrativesPage() {
                   ))}
                 </div>
               )}
+            </Section>
+          )}
+
+          {/* Analog precedents (M7) — the card shows what the prior is built from */}
+          {open.analogs.length > 0 && (
+            <Section title={`precedents (${open.analogs.length})`}>
+              {open.analogs.map((a) => {
+                const o = (a.outcome ?? {}) as {
+                  amplified?: boolean; reachedPeak?: boolean; hoursAmpToPeak?: number | null;
+                };
+                // "not yet" rather than "never": a precedent still running is a
+                // right-censored observation, not a settled negative.
+                const outcome = !o.amplified
+                  ? "did not amplify (not an eligible trial)"
+                  : o.reachedPeak
+                    ? `peaked ${o.hoursAmpToPeak != null ? `${Math.round(o.hoursAmpToPeak)}h after amplifying` : "after amplifying"}`
+                    : "no peak yet";
+                return (
+                  <div key={a.id} className="mb-1 text-[11px]" style={{ color: "var(--nx-text-primary)" }}>
+                    <span style={{ color: "var(--nx-text-muted)" }}>{(100 * a.sim).toFixed(0)}% </span>
+                    {a.label || "(unlabeled)"}
+                    {a.regimeMatch ? (
+                      <span style={{ color: "#22c55e" }} title="same market regime at seed time">
+                        {" "}·regime✓
+                      </span>
+                    ) : (
+                      <span style={{ color: "var(--nx-text-muted)" }} title="different or unknown regime — excluded from the prior">
+                        {" "}·regime✗
+                      </span>
+                    )}
+                    <span style={{ color: "var(--nx-text-muted)" }}> — {outcome}</span>
+                  </div>
+                );
+              })}
+            </Section>
+          )}
+
+          {/* Negative space (M10) */}
+          {open.negativeSpace.length > 0 && (
+            <Section title="negative space">
+              {open.negativeSpace.map((ns, i) => {
+                const d = (ns.detail ?? {}) as { country?: string; direction?: string; note?: string };
+                return (
+                  <div key={i} className="text-[11px]" style={{ color: "var(--nx-text-primary)" }}>
+                    <b>{ns.kind}</b> z={ns.z.toFixed(1)}
+                    <span style={{ color: "var(--nx-text-muted)" }}>
+                      {" "}
+                      {ns.kind === "asymmetry"
+                        ? `— ${d.country ?? "?"} ${d.direction ?? ""} vs corpus baseline`
+                        : `— ${d.note ?? "decayed faster than trend"}`}
+                    </span>
+                  </div>
+                );
+              })}
+            </Section>
+          )}
+
+          {/* Source-graph behavioral priors (M4) — statistics about outlets,
+              never evidence about this story (R5/R7). */}
+          {open.sourcePriors.length > 0 && (
+            <Section title="outlet priors (statistics about outlets over many stories, not evidence about this one)">
+              {open.sourcePriors.map((p) => (
+                <div key={p.domain} className="text-[10px]" style={{ color: "var(--nx-text-muted)" }}>
+                  <span style={{ color: "var(--nx-text-primary)" }}>{p.domain}</span>
+                  {p.country ? ` (${p.country})` : ""}
+                  {p.firstMoverRate == null || !p.narratives ? (
+                    <span title="not enough resolvable narratives yet"> · no prior yet</span>
+                  ) : (
+                    <>
+                      {" "}· seeds {(100 * p.firstMoverRate).toFixed(0)}% of {p.narratives} · wire{" "}
+                      {p.wireDependence == null ? "—" : `${(100 * p.wireDependence).toFixed(0)}%`}
+                      {p.avgLeadHours != null &&
+                        ` · ${p.avgLeadHours >= 0 ? "leads" : "follows"} by ${Math.abs(p.avgLeadHours).toFixed(1)}h`}
+                    </>
+                  )}
+                </div>
+              ))}
             </Section>
           )}
 
