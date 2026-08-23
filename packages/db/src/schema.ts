@@ -314,8 +314,8 @@ export const loomArticles = pgTable(
     publishedAt: timestamp("published_at", { withTimezone: true }), // claimed (R1)
     firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(), // observed (R1)
     gdeltRef: text("gdelt_ref"),
-    embedding: vector("embedding", { dimensions: EMB_DIM }), // populated in Phase 1
-    narrativeId: uuid("narrative_id"), // FK lands with the narratives table (Phase 1)
+    embedding: vector("embedding", { dimensions: EMB_DIM }), // populated by the Phase 1 cluster tick
+    narrativeId: uuid("narrative_id").references(() => loomNarratives.id, { onDelete: "set null" }),
   },
   (t) => ({
     firstSeenIdx: index("loom_articles_first_seen_idx").on(t.firstSeenAt),
@@ -340,6 +340,85 @@ export const loomWireReleases = pgTable(
   (t) => ({
     firstSeenIdx: index("loom_wires_first_seen_idx").on(t.firstSeenAt),
     hashIdx: index("loom_wires_hash_idx").on(t.textHash), // provenance fingerprint lookups (M2)
+  })
+);
+
+// LOOM Phase 1 — narratives. An article joins the nearest narrative within a
+// trailing window when cosine similarity clears LOOM_SIM_THRESHOLD; otherwise
+// it seeds a CANDIDATE cluster (promoted_at NULL). A candidate promotes to a
+// real narrative at >= LOOM_PROMOTE_MIN_ARTICLES from >= _MIN_OUTLETS distinct
+// outlets; the LLM labels it at promotion (offline-safe: label stays NULL and
+// is retried). Lifecycle (spec M2): seeding -> amplifying -> peak -> decaying
+// -> dormant, with reignition, driven by velocity with hysteresis.
+export const loomNarratives = pgTable(
+  "loom_narratives",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    label: text("label"), // NULL until the LLM labels it (post-promotion)
+    labelAttempts: integer("label_attempts").notNull().default(0), // real (non-offline) label failures; capped
+    summary: text("summary"),
+    state: text("state").notNull().default("seeding"), // seeding|amplifying|peak|decaying|dormant
+    centroid: vector("centroid", { dimensions: EMB_DIM }).notNull(), // running mean of member embeddings
+    articleCount: integer("article_count").notNull().default(0),
+    outletCount: integer("outlet_count").notNull().default(0),
+    langCount: integer("lang_count").notNull().default(0),
+    maxVel24: real("max_vel24").notNull().default(0), // high-water trailing-24h count (hysteresis anchor)
+    seededAt: timestamp("seeded_at", { withTimezone: true }).notNull().defaultNow(),
+    promotedAt: timestamp("promoted_at", { withTimezone: true }), // NULL = candidate cluster
+    peakAt: timestamp("peak_at", { withTimezone: true }),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    lastStateChangeAt: timestamp("last_state_change_at", { withTimezone: true }),
+    modelVer: text("model_ver"), // model that wrote label/summary
+  },
+  (t) => ({
+    stateIdx: index("loom_narratives_state_idx").on(t.state),
+    lastSeenIdx: index("loom_narratives_last_seen_idx").on(t.lastSeenAt), // trailing-window candidate scan
+  })
+);
+
+// Hourly metrics per promoted narrative (spec narrative_metrics_hourly).
+// Deliberate Phase 1 MVP cuts vs the spec's field list: reach_countries
+// (loom_outlets.country is never populated yet — outlet enrichment is a later
+// phase), tone_mean/tone_var (need GDELT tone codings; the BigQuery arm is
+// stubbed), and amp_ratio (needs the M2 wire-copy coordination matcher,
+// Phase 4). Lifecycle transitions likewise gate on velocity only for now —
+// the spec's reach thresholds join in when reach data is richer than 3 feeds.
+export const loomNarrativeMetrics = pgTable(
+  "loom_narrative_metrics",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    narrativeId: uuid("narrative_id")
+      .notNull()
+      .references(() => loomNarratives.id, { onDelete: "cascade" }),
+    ts: timestamp("ts", { withTimezone: true }).notNull().defaultNow(),
+    vel24: integer("vel24").notNull().default(0), // articles in trailing 24h
+    vel6: integer("vel6").notNull().default(0), // articles in trailing 6h
+    accel: real("accel").notNull().default(0), // vel24 delta vs previous measurement
+    reachOutlets: integer("reach_outlets").notNull().default(0), // distinct outlets, trailing 24h
+    reachLangs: integer("reach_langs").notNull().default(0),
+    articleCount: integer("article_count").notNull().default(0), // lifetime total at measurement
+    state: text("state").notNull(), // state AFTER this measurement's transition
+  },
+  (t) => ({
+    narrativeTsIdx: index("loom_metrics_narrative_ts_idx").on(t.narrativeId, t.ts),
+  })
+);
+
+// Lifecycle transition log (Phase 1 acceptance: "transitions logged and sane").
+export const loomNarrativeTransitions = pgTable(
+  "loom_narrative_transitions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    narrativeId: uuid("narrative_id")
+      .notNull()
+      .references(() => loomNarratives.id, { onDelete: "cascade" }),
+    fromState: text("from_state").notNull(),
+    toState: text("to_state").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    metrics: jsonb("metrics").notNull().default({}), // {vel24, vel6, accel, maxVel24} at transition
+  },
+  (t) => ({
+    narrativeIdx: index("loom_transitions_narrative_idx").on(t.narrativeId),
   })
 );
 
@@ -368,5 +447,8 @@ export const schema = {
   loomOutlets,
   loomArticles,
   loomWireReleases,
+  loomNarratives,
+  loomNarrativeMetrics,
+  loomNarrativeTransitions,
   settings,
 };

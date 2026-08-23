@@ -157,6 +157,12 @@ export interface LoomStatus {
   dupTextHashPct: number; // near-dup rate proxy; accept < 5
   oldestFirstSeen: string | null;
   newestFirstSeen: string | null;
+  // Phase 1 (narratives)
+  articlesEmbedded: number;
+  articlesAssigned: number;
+  narrativesPromoted: number;
+  narrativesCandidates: number;
+  narrativesUnlabeled: number; // promoted but awaiting an LLM label
 }
 
 export async function loomStatus(): Promise<LoomStatus> {
@@ -169,7 +175,12 @@ export async function loomStatus(): Promise<LoomStatus> {
       (SELECT count(*) FROM loom_articles WHERE first_seen_at IS NULL)                        AS missing_first_seen,
       (SELECT count(*) - count(DISTINCT text_hash) FROM loom_articles WHERE text_hash IS NOT NULL) AS dup_hashes,
       (SELECT min(first_seen_at)::text FROM loom_articles)                                    AS oldest_fs,
-      (SELECT max(first_seen_at)::text FROM loom_articles)                                    AS newest_fs
+      (SELECT max(first_seen_at)::text FROM loom_articles)                                    AS newest_fs,
+      (SELECT count(*) FROM loom_articles WHERE embedding IS NOT NULL)                        AS embedded,
+      (SELECT count(*) FROM loom_articles WHERE narrative_id IS NOT NULL)                     AS assigned,
+      (SELECT count(*) FROM loom_narratives WHERE promoted_at IS NOT NULL)                    AS promoted,
+      (SELECT count(*) FROM loom_narratives WHERE promoted_at IS NULL)                        AS candidates,
+      (SELECT count(*) FROM loom_narratives WHERE promoted_at IS NOT NULL AND label IS NULL)  AS unlabeled
   `);
   const r = (res as unknown as { rows: Array<Record<string, unknown>> }).rows[0] ?? {};
   const total = Number(r.articles_total ?? 0);
@@ -182,5 +193,10 @@ export async function loomStatus(): Promise<LoomStatus> {
     dupTextHashPct: total === 0 ? 0 : Math.round((Number(r.dup_hashes ?? 0) / total) * 1000) / 10,
     oldestFirstSeen: (r.oldest_fs as string) ?? null,
     newestFirstSeen: (r.newest_fs as string) ?? null,
+    articlesEmbedded: Number(r.embedded ?? 0),
+    articlesAssigned: Number(r.assigned ?? 0),
+    narrativesPromoted: Number(r.promoted ?? 0),
+    narrativesCandidates: Number(r.candidates ?? 0),
+    narrativesUnlabeled: Number(r.unlabeled ?? 0),
   };
 }

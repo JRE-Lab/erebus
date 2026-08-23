@@ -49,7 +49,7 @@ import { llmLive, runDebate } from "@erebus/agents";
 import { ingestAll, matchNode, rematchRecent } from "@erebus/ingest";
 import { getMarketOverview, mapUnmappedTheories, mapTheory, refreshMarket } from "@erebus/market";
 import { runGameRead, latestGameRead } from "@erebus/gametheory";
-import { ingestLoom, loomStatus } from "@erebus/loom";
+import { ingestLoom, loomStatus, runLoomPass, listLoomNarratives, getLoomNarrative } from "@erebus/loom";
 import { runShadowRead } from "@erebus/shadowboard";
 import {
   nodeToContent,
@@ -515,6 +515,31 @@ app.get("/loom/status", (c) =>
 );
 // POST /api/loom/ingest -> manual wire+article pull (free — RSS + hashing only).
 app.post("/loom/ingest", (c) => guard(c, async () => c.json(await ingestLoom())));
+
+// GET /api/loom/narratives?state=&limit= -> promoted narrative cards (read-only).
+app.get("/loom/narratives", (c) =>
+  guard(c, async () =>
+    c.json(
+      await listLoomNarratives({
+        state: c.req.query("state"),
+        limit: clampInt(c.req.query("limit"), 1, 100, 50),
+      })
+    )
+  )
+);
+// GET /api/loom/narratives/:id -> full card payload (articles, metrics, transitions).
+app.get("/loom/narratives/:id", (c) =>
+  guard(c, async () => {
+    const id = c.req.param("id");
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return c.json({ error: "not found" }, 404);
+    const n = await getLoomNarrative(id);
+    return n ? c.json(n) : c.json({ error: "not found" }, 404);
+  })
+);
+// POST /api/loom/cluster -> manual cluster + lifecycle pass. The whole pass
+// (including lifecycle) holds one advisory lock, so overlapping a worker tick
+// makes this a cheap no-op; embeds/labels inside are pause- and budget-gated.
+app.post("/loom/cluster", (c) => guard(c, async () => c.json(await runLoomPass())));
 
 // --- Market correlation -----------------------------------------------------
 // GET /api/market -> catalog quotes + per-theory instrument links & verdicts.

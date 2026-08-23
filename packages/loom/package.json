@@ -12,6 +12,7 @@
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
+    "@erebus/agents": "workspace:*",
     "@erebus/db": "workspace:*",
     "@erebus/ingest": "workspace:*",
     "drizzle-orm": "^0.38.3"

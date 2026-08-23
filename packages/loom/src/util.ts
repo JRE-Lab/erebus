@@ -13,6 +13,10 @@ const TRACKING_PARAMS = new Set([
 export function canonicalizeUrl(raw: string): string | null {
   try {
     const u = new URL(raw.trim());
+    // Only web URLs are article identities. A hostile feed item with a
+    // javascript:/data: scheme would otherwise be stored verbatim and rendered
+    // as a clickable href in the narratives tab (stored XSS).
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
     u.hostname = u.hostname.toLowerCase();
     u.hash = "";
     for (const k of [...u.searchParams.keys()]) {

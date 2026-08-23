@@ -355,3 +355,18 @@ Return JSON:
   "reversalTripwire": "the ONE observable that, if it occurs, means abandon/reverse the position"
 }`;
 }
+
+// --- LOOM: narrative labeling (M2 — at cluster promotion; fast tier) --------
+export function loomLabelPrompt(samples: Array<{ title: string; lede: string }>): string {
+  return `You name news narratives for an intelligence dashboard. Below are sample headlines/ledes from ONE cluster of related articles. Produce a short neutral label (a noun phrase naming the story, max 10 words — no editorializing, no hashtags) and a two-sentence plain summary of what the narrative is about.
+${UNTRUSTED_NOTE}
+
+SAMPLE ARTICLES:
+${samples.map((s, i) => `${i + 1}. ${untrusted(s.title, 200)} — ${untrusted(s.lede, 300)}`).join("\n")}
+
+Return JSON:
+{
+  "label": "short noun-phrase name for the narrative",
+  "summary": "two sentences, plain and neutral"
+}`;
+}

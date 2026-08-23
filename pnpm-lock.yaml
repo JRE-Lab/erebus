@@ -309,6 +309,9 @@ importers:
 
   packages/loom:
     dependencies:
+      '@erebus/agents':
+        specifier: workspace:*
+        version: link:../agents
       '@erebus/db':
         specifier: workspace:*
         version: link:../db

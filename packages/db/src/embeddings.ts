@@ -80,6 +80,19 @@ async function voyageEmbed(text: string): Promise<number[]> {
   return j.data[0]!.embedding;
 }
 
+// Whether embed() would return a REAL provider vector right now (vs the
+// deterministic hash-space fallback). Callers that PERSIST embeddings for
+// similarity work (LOOM clustering) must check this first: a stored offline
+// vector is permanent corpus poison, so when this is false they skip the item
+// and retry next tick instead of storing junk. isPaused() is cached, so this
+// is cheap enough to call per item inside a batch loop.
+export async function embeddingsLive(): Promise<boolean> {
+  if (PROVIDER === "openai" && !process.env.OPENAI_API_KEY) return false;
+  if (PROVIDER === "voyage" && !process.env.VOYAGE_API_KEY) return false;
+  if (PROVIDER !== "openai" && PROVIDER !== "voyage") return false;
+  return !(await isPaused());
+}
+
 export async function embed(text: string): Promise<number[]> {
   if (!text?.trim()) return new Array<number>(EMBEDDING_DIM).fill(0);
   // Global pause kill-switch — never hit a paid embedding API while paused.
@@ -87,4 +100,15 @@ export async function embed(text: string): Promise<number[]> {
   if (PROVIDER === "openai") return openaiEmbed(text);
   if (PROVIDER === "voyage") return voyageEmbed(text);
   return offlineEmbed(text);
+}
+
+// Strict variant for callers that PERSIST vectors: throws instead of degrading
+// to the hash-space fallback. embed()'s internal isPaused() re-read can flip
+// mid-batch (4s cache TTL) and silently hand back a poison vector even after
+// an embeddingsLive() pre-check — this variant never calls the fallback at
+// all, so the store path is structurally incapable of persisting one.
+export async function embedStrict(text: string): Promise<number[]> {
+  if (!(await embeddingsLive())) throw new Error("embeddings not live (paused/keyless)");
+  if (!text?.trim()) throw new Error("embedStrict: empty text");
+  return PROVIDER === "voyage" ? voyageEmbed(text) : openaiEmbed(text);
 }

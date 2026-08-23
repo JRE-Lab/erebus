@@ -44,6 +44,8 @@ services:
     restart: unless-stopped
     ports:
       - "4000:3000"
+    env_file:
+      - .env
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://erebus:${POSTGRES_PASSWORD:-erebus_prod}@postgres:5432/erebus
@@ -79,6 +81,8 @@ services:
       dockerfile: apps/worker/Dockerfile
     container_name: erebus-worker
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://erebus:${POSTGRES_PASSWORD:-erebus_prod}@postgres:5432/erebus

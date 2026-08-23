@@ -18,7 +18,7 @@ import { ingestAll, rematchRecent, matchNode } from "@erebus/ingest";
 import { runAlerts } from "./alerts.js";
 import { runGardener } from "@erebus/gardener";
 import { mapUnmappedTheories, refreshMarket, resolveByMarket } from "@erebus/market";
-import { ingestLoom, pullGdelt } from "@erebus/loom";
+import { ingestLoom, pullGdelt, runLoomPass } from "@erebus/loom";
 import { llmLive, call, OPUS } from "@erebus/agents";
 import { runCycle } from "./cycle.js";
 import { withinDailyBudget } from "./governors.js";
@@ -236,6 +236,30 @@ export function startScheduler(): SchedulerHandle {
     "none"
   );
 
+  // LOOM Phase 1 — hourly clustering + lifecycle (spec M2 cadence). Ungated at
+  // the tick level because the paid parts inside are already self-gated:
+  // embeddings check embeddingsLive() (pause + key), the labeler goes through
+  // callJSON (pause + daily budget), and everything else is pure SQL. This
+  // keeps narratives forming even with the autonomous toggle off.
+  const loomClusterEvery = minutes("LOOM_CLUSTER_EVERY_MIN", 60);
+  const loomClusterTick = guarded(
+    "loom-cluster",
+    async () => {
+      const p = await runLoomPass();
+      if (p.skipped) return { skipped: p.skipped };
+      return {
+        embedded: p.embedded,
+        assigned: p.assigned,
+        seeded: p.seeded,
+        promoted: p.promoted,
+        labeled: p.labeled,
+        transitions: p.transitions ?? 0,
+        cost: p.cost,
+      };
+    },
+    "none"
+  );
+
   // Resolution verification: source-verified judge sweeps due theories and
   // audits recent resolutions (twice daily; Sonnet-cheap, budget-gated).
   const verifyEvery = minutes("VERIFY_EVERY_MIN", 720);
@@ -257,6 +281,7 @@ export function startScheduler(): SchedulerHandle {
     setInterval(alertsTick, alertsEvery * MIN),
     setInterval(verifyTick, verifyEvery * MIN),
     setInterval(loomTick, loomEvery * MIN),
+    setInterval(loomClusterTick, loomClusterEvery * MIN),
   ];
 
   // --- continuous roam: branch back-to-back while enabled --------------------
@@ -304,6 +329,7 @@ export function startScheduler(): SchedulerHandle {
   }, 20_000);
   const marketKickoff = setTimeout(() => void marketTick(), 45_000);
   const loomKickoff = setTimeout(() => void loomTick(), 30_000); // free — safe on every boot
+  const loomClusterKickoff = setTimeout(() => void loomClusterTick(), 90_000); // after the first ingest lands
   scheduleRoam(25_000);
 
   const stop = () => {
@@ -312,6 +338,7 @@ export function startScheduler(): SchedulerHandle {
     clearTimeout(kickoff);
     clearTimeout(marketKickoff);
     clearTimeout(loomKickoff);
+    clearTimeout(loomClusterKickoff);
     if (roamTimer) clearTimeout(roamTimer);
     console.log("[scheduler] stopped");
   };
