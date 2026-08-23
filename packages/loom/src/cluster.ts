@@ -38,6 +38,10 @@ import {
 } from "@erebus/db";
 import { callJSON, loomLabelPrompt, SONNET } from "@erebus/agents";
 import { runLoomLifecycle, type LoomLifecycleResult } from "./lifecycle.js";
+import { resolveNarrativeEntities } from "./entities.js";
+import { extractFraming, runIntent } from "./intent.js";
+import { issueForecasts } from "./forecasts.js";
+import { matchPlaybooks } from "./playbooks.js";
 
 // Spec starts at 0.82 and says "tune on eval set" — measured on live data,
 // text-embedding-3-small puts same-story cross-outlet pairs at ~0.70-0.80
@@ -62,13 +66,23 @@ export interface LoomClusterResult {
   skipped?: string;
 }
 
-export type LoomPassResult = LoomClusterResult & Partial<LoomLifecycleResult>;
+export type LoomPassResult = LoomClusterResult &
+  Partial<LoomLifecycleResult> & {
+    entitiesLinked?: number;
+    framed?: number;
+    achScored?: number;
+    judgments?: number;
+    forecastsIssued?: number;
+    playbookMatches?: number;
+  };
 
 const ZERO: LoomClusterResult = { embedded: 0, assigned: 0, seeded: 0, promoted: 0, labeled: 0, cost: 0 };
 
-// The single entry point (worker tick + manual POST): cluster then lifecycle,
-// both under one cross-process advisory lock so concurrent passes can neither
-// double-seed candidates nor double-write metrics/transition rows.
+// The single entry point (worker tick + manual POST): cluster -> lifecycle ->
+// entities -> framing -> intent -> forecasts -> playbooks, all under one
+// cross-process advisory lock. Every paid step inside is pause- and
+// budget-gated on its own (embedStrict / callJSON), so the pass degrades to
+// the free work when paused or over budget instead of failing.
 export async function runLoomPass(): Promise<LoomPassResult> {
   const client = await pool.connect();
   try {
@@ -77,7 +91,22 @@ export async function runLoomPass(): Promise<LoomPassResult> {
     try {
       const cluster = await clusterInner();
       const lifecycle = await runLoomLifecycle();
-      return { ...cluster, ...lifecycle };
+      const entities = await resolveNarrativeEntities();
+      const framing = await extractFraming();
+      const intent = await runIntent();
+      const forecasts = await issueForecasts();
+      const playbooks = await matchPlaybooks();
+      return {
+        ...cluster,
+        ...lifecycle,
+        cost: cluster.cost + entities.cost + framing.cost + intent.cost,
+        entitiesLinked: entities.entitiesLinked,
+        framed: framing.framed,
+        achScored: intent.scored,
+        judgments: intent.judgments,
+        forecastsIssued: forecasts.lifecycle + forecasts.market,
+        playbookMatches: playbooks.matched,
+      };
     } finally {
       await client.query(`SELECT pg_advisory_unlock(${LOCK_KEY})`);
     }

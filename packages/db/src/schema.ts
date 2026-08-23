@@ -11,11 +11,14 @@ import {
   integer,
   boolean,
   jsonb,
+  date,
+  doublePrecision,
   vector,
   index,
   uniqueIndex,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 const EMB_DIM = 1536;
 
@@ -340,6 +343,10 @@ export const loomWireReleases = pgTable(
   (t) => ({
     firstSeenIdx: index("loom_wires_first_seen_idx").on(t.firstSeenAt),
     hashIdx: index("loom_wires_hash_idx").on(t.textHash), // provenance fingerprint lookups (M2)
+    // Case-insensitive title probe for the coordination provenance component;
+    // without it that half of the match degrades to a full scan of a table
+    // that grows every 15 minutes.
+    titleIdx: index("loom_wires_title_lower_idx").on(sql`lower(${t.title})`),
   })
 );
 
@@ -369,6 +376,16 @@ export const loomNarratives = pgTable(
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
     lastStateChangeAt: timestamp("last_state_change_at", { withTimezone: true }),
     modelVer: text("model_ver"), // model that wrote label/summary
+    // Phase 4 (intent/coordination) denormalized card fields
+    frame: jsonb("frame"), // modal framing slots {protagonist,antagonist,threat,remedy,urgency,impliedAction}
+    coordinationScore: real("coordination_score"), // 0-100
+    coordCiLow: real("coord_ci_low"),
+    coordCiHigh: real("coord_ci_high"),
+    wireSharePct: real("wire_share_pct"), // provenance: share of articles matching wire copy
+    firstMoverOutlet: text("first_mover_outlet"),
+    achScoredAt: timestamp("ach_scored_at", { withTimezone: true }),
+    achAttempts: integer("ach_attempts").notNull().default(0), // real (non-offline) ACH failures; capped
+    entitiesScannedAt: timestamp("entities_scanned_at", { withTimezone: true }), // NER ran (even if it found nothing)
   },
   (t) => ({
     stateIdx: index("loom_narratives_state_idx").on(t.state),
@@ -422,6 +439,351 @@ export const loomNarrativeTransitions = pgTable(
   })
 );
 
+// ============================================================================
+// LOOM Phase 2 — entity graph + market linkage (spec M3 + event studies).
+// MVP cuts (documented): companies/countries/commodities only (people and
+// institutions v2); aliases live as a jsonb array on the entity row instead of
+// a separate table; company→ticker resolves via SEC company_tickers.json only
+// (US-listed; OpenFIGI needs a key); sector 0.4 / supply-chain 0.2 exposure
+// edges are v2 — Phase 2 ships direct 1.0 + country/commodity proxy edges.
+// ============================================================================
+export const loomEntities = pgTable(
+  "loom_entities",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    kind: text("kind").notNull(), // company|country|commodity
+    canonName: text("canon_name").notNull(),
+    aliases: jsonb("aliases").notNull().default([]), // string[]
+    ticker: text("ticker"), // resolved symbol (companies; proxies live on exposures)
+    cik: text("cik"), // SEC CIK when resolved (companies)
+    meta: jsonb("meta").notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    kindNameUq: uniqueIndex("loom_entities_kind_name_uq").on(t.kind, t.canonName),
+  })
+);
+
+export const loomInstruments = pgTable("loom_instruments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  symbol: text("symbol").notNull().unique(),
+  kind: text("kind").notNull(), // equity|etf|index
+  name: text("name"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// entity -> instrument exposure edges (spec: direct 1.0 | sector 0.4 | ...).
+export const loomExposures = pgTable(
+  "loom_exposures",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    entityId: uuid("entity_id")
+      .notNull()
+      .references(() => loomEntities.id, { onDelete: "cascade" }),
+    instrumentId: uuid("instrument_id")
+      .notNull()
+      .references(() => loomInstruments.id, { onDelete: "cascade" }),
+    weight: real("weight").notNull(),
+    kind: text("kind").notNull(), // direct|country_proxy|commodity_proxy
+  },
+  (t) => ({
+    pairUq: uniqueIndex("loom_exposures_pair_uq").on(t.entityId, t.instrumentId),
+  })
+);
+
+export const loomNarrativeEntities = pgTable(
+  "loom_narrative_entities",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    narrativeId: uuid("narrative_id")
+      .notNull()
+      .references(() => loomNarratives.id, { onDelete: "cascade" }),
+    entityId: uuid("entity_id")
+      .notNull()
+      .references(() => loomEntities.id, { onDelete: "cascade" }),
+    salience: real("salience").notNull().default(0.5),
+    sentiment: real("sentiment"),
+  },
+  (t) => ({
+    pairUq: uniqueIndex("loom_narr_entities_pair_uq").on(t.narrativeId, t.entityId),
+  })
+);
+
+// Daily OHLCV per instrument (free feeds; the substrate for detectors + CARs).
+export const loomPrices = pgTable(
+  "loom_prices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    instrumentId: uuid("instrument_id")
+      .notNull()
+      .references(() => loomInstruments.id, { onDelete: "cascade" }),
+    date: date("date").notNull(),
+    open: doublePrecision("open"),
+    high: doublePrecision("high"),
+    low: doublePrecision("low"),
+    close: doublePrecision("close").notNull(),
+    volume: doublePrecision("volume"),
+  },
+  (t) => ({
+    instDateUq: uniqueIndex("loom_prices_inst_date_uq").on(t.instrumentId, t.date),
+  })
+);
+
+// Event studies keyed on narrative first-seen (R1): market model r_i = a + b*r_m
+// estimated over <=120 trading days ending T-11; CAR windows [-10,-1] / [0,+1]
+// / [+2,+10]. car_post stays NULL until the window closes (upserted later).
+export const loomEventStudies = pgTable(
+  "loom_event_studies",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    narrativeId: uuid("narrative_id")
+      .notNull()
+      .references(() => loomNarratives.id, { onDelete: "cascade" }),
+    instrumentId: uuid("instrument_id")
+      .notNull()
+      .references(() => loomInstruments.id, { onDelete: "cascade" }),
+    carPre: real("car_pre"),
+    carEvent: real("car_event"),
+    carPost: real("car_post"),
+    modelMeta: jsonb("model_meta").notNull().default({}), // {alpha,beta,n,sigma,eventDate}
+    computedAt: timestamp("computed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pairUq: uniqueIndex("loom_event_studies_pair_uq").on(t.narrativeId, t.instrumentId),
+  })
+);
+
+// ============================================================================
+// LOOM Phase 3 — positioning (spec M5) + regimes (M6 slice).
+// MVP cuts (documented): detectors are vol_z + resid_ret (full) and
+// insider_score as an EDGAR Form-4 filing-count z proxy (real per-insider
+// cluster parsing is v2); si_delta and all options detectors (oi_jump,
+// pc_skew, iv_pctl) are v2/vendor-gated. R4 is enforced at the SCHEMA level:
+// placebo_pctl on flags is NOT NULL — a flag without its placebo percentile
+// cannot exist.
+// ============================================================================
+export const loomPositioning = pgTable(
+  "loom_positioning",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    instrumentId: uuid("instrument_id")
+      .notNull()
+      .references(() => loomInstruments.id, { onDelete: "cascade" }),
+    date: date("date").notNull(),
+    volZ: real("vol_z"), // volume z vs trailing 60d
+    residRet: real("resid_ret"), // residual daily return vs market model
+    insiderScore: real("insider_score"), // Form-4 filing-count z proxy (documented cut)
+    siDeltaPctl: real("si_delta_pctl"), // v2 — always NULL for now
+  },
+  (t) => ({
+    instDateUq: uniqueIndex("loom_positioning_inst_date_uq").on(t.instrumentId, t.date),
+  })
+);
+
+// Daily regime state (spec M6 conditioner, threshold MVP): risk_on|neutral|risk_off
+// from VIX level + short trend; HY OAS / breadth join when a data key exists.
+export const loomRegimes = pgTable("loom_regimes", {
+  date: date("date").primaryKey(),
+  state: text("state").notNull(),
+  vix: real("vix"),
+  vixTrend: real("vix_trend"), // 5d VIX change
+  meta: jsonb("meta").notNull().default({}),
+});
+
+// Placebo distributions (R4): the same composite computed on random
+// instrument-date draws, stratified by regime. Stored per run so stability
+// across runs is checkable (Phase 3 acceptance).
+export const loomPlaceboRuns = pgTable("loom_placebo_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  regimeState: text("regime_state").notNull(),
+  samples: integer("samples").notNull(),
+  mean: real("mean").notNull(),
+  sd: real("sd").notNull(),
+  quantiles: jsonb("quantiles").notNull().default({}), // {p50,p75,p90,p95,p99}
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const loomPrepositionFlags = pgTable(
+  "loom_preposition_flags",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    narrativeId: uuid("narrative_id")
+      .notNull()
+      .references(() => loomNarratives.id, { onDelete: "cascade" }),
+    instrumentId: uuid("instrument_id")
+      .notNull()
+      .references(() => loomInstruments.id, { onDelete: "cascade" }),
+    windowStart: date("window_start").notNull(), // [T-10d, T-1] keyed on first_seen (R1)
+    windowEnd: date("window_end").notNull(),
+    composite: real("composite").notNull(),
+    detectors: jsonb("detectors").notNull().default({}), // which detectors fired, with values
+    placeboPctl: real("placebo_pctl").notNull(), // R4: NOT NULL — no flag without it
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pairUq: uniqueIndex("loom_preposition_pair_uq").on(t.narrativeId, t.instrumentId),
+  })
+);
+
+// ============================================================================
+// LOOM Phase 4 — intent (M8), framing/coordination (M2 back-half), forecasts
+// + scoring (M11), playbooks (M9 pilot).
+// R2 is enforced in code at the single judgment write path AND at render:
+// no judgment persists or serializes without runner-up + >=1 falsifier.
+// R3: loom_forecasts is APPEND-ONLY by code discipline — there is no update
+// path; resolutions live in their own table.
+// ============================================================================
+export const loomFraming = pgTable("loom_framing", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  articleId: uuid("article_id")
+    .notNull()
+    .unique()
+    .references(() => loomArticles.id, { onDelete: "cascade" }),
+  protagonist: text("protagonist"),
+  antagonist: text("antagonist"),
+  threat: text("threat"),
+  remedy: text("remedy"),
+  urgency: text("urgency"), // low|medium|high
+  impliedAction: text("implied_action"),
+  model: text("model"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const loomHypotheses = pgTable(
+  "loom_hypotheses",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    narrativeId: uuid("narrative_id")
+      .notNull()
+      .references(() => loomNarratives.id, { onDelete: "cascade" }),
+    code: text("code").notNull(), // H1..H7 (fixed taxonomy, spec M8)
+    score: real("score").notNull().default(0), // least-inconsistent wins
+    rank: integer("rank").notNull().default(0),
+  },
+  (t) => ({
+    pairUq: uniqueIndex("loom_hypotheses_pair_uq").on(t.narrativeId, t.code),
+  })
+);
+
+export const loomEvidence = pgTable(
+  "loom_evidence",
+  {
+  id: uuid("id").primaryKey().defaultRandom(),
+  narrativeId: uuid("narrative_id")
+    .notNull()
+    .references(() => loomNarratives.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(), // coordination|provenance|first_mover|beneficiary|preposition|negative_space
+  payload: jsonb("payload").notNull().default({}),
+    consistency: jsonb("consistency").notNull().default({}), // {H1:"C"|"I"|"N",...} + rationale
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ narrativeIdx: index("loom_evidence_narrative_idx").on(t.narrativeId) })
+);
+
+export const loomJudgments = pgTable(
+  "loom_judgments",
+  {
+  id: uuid("id").primaryKey().defaultRandom(),
+  narrativeId: uuid("narrative_id")
+    .notNull()
+    .references(() => loomNarratives.id, { onDelete: "cascade" }),
+  topH: text("top_h").notNull(),
+  topBand: text("top_band").notNull(), // ICD 203 estimative band
+  runnerH: text("runner_h").notNull(), // R2: runner-up always present
+  runnerBand: text("runner_band").notNull(),
+  confidence: text("confidence").notNull(), // low|moderate|high (separate from likelihood)
+    falsifiers: jsonb("falsifiers").notNull(), // string[], length >= 1 enforced at the write path
+    publishedAt: timestamp("published_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ narrativeIdx: index("loom_judgments_narrative_idx").on(t.narrativeId, t.publishedAt) })
+);
+
+export const loomBeneficiaries = pgTable(
+  "loom_beneficiaries",
+  {
+  id: uuid("id").primaryKey().defaultRandom(),
+  narrativeId: uuid("narrative_id")
+    .notNull()
+    .references(() => loomNarratives.id, { onDelete: "cascade" }),
+  entityId: uuid("entity_id").references(() => loomEntities.id, { onDelete: "set null" }),
+  name: text("name").notNull(),
+  rationale: text("rationale"),
+    falsifier: text("falsifier").notNull(), // each row carries its own falsifier (R2/R7)
+    rank: integer("rank").notNull().default(0),
+  },
+  (t) => ({ narrativeIdx: index("loom_beneficiaries_narrative_idx").on(t.narrativeId) })
+);
+
+// Pre-registered forecasts (R3: append-only; no update path exists in code).
+export const loomForecasts = pgTable(
+  "loom_forecasts",
+  {
+  id: uuid("id").primaryKey().defaultRandom(),
+  narrativeId: uuid("narrative_id")
+    .notNull()
+    .references(() => loomNarratives.id, { onDelete: "cascade" }),
+  claimType: text("claim_type").notNull(), // lifecycle|market_move|preposition
+  targetRef: jsonb("target_ref").notNull().default({}), // e.g. {instrument:"XLE"} or {toState:"peak"}
+  direction: text("direction"), // up|down (market_move)
+  magnitudeBand: text("magnitude_band"), // e.g. "1-3%"
+  windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+  windowEnd: timestamp("window_end", { withTimezone: true }).notNull(),
+  prob: real("prob").notNull(),
+  regimeAtIssue: text("regime_at_issue"),
+    modelVer: text("model_ver"),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    narrativeIdx: index("loom_forecasts_narrative_idx").on(t.narrativeId, t.issuedAt),
+    windowEndIdx: index("loom_forecasts_window_end_idx").on(t.windowEnd), // due-resolution scan
+  })
+);
+
+export const loomResolutions = pgTable(
+  "loom_resolutions",
+  {
+  id: uuid("id").primaryKey().defaultRandom(),
+  forecastId: uuid("forecast_id")
+    .notNull()
+    .unique()
+    .references(() => loomForecasts.id, { onDelete: "cascade" }),
+    outcome: boolean("outcome").notNull(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }).notNull().defaultNow(),
+    brier: real("brier").notNull(),
+  },
+  (t) => ({ resolvedIdx: index("loom_resolutions_resolved_idx").on(t.resolvedAt) }) // 90d scoreboard window
+);
+
+// M9 pilot: playbooks are pre-registered narrative predictions for a theory
+// branch; the matcher scores promoted narratives against their watch patterns.
+export const loomPlaybooks = pgTable("loom_playbooks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  theoryRef: text("theory_ref").notNull(), // EREBUS node id
+  outcomeDesc: text("outcome_desc").notNull(),
+  pattern: jsonb("pattern").notNull().default({}), // {themes[], actors[], framingSignature, sequencing}
+  confidence: real("confidence").notNull().default(0.5), // decays on non-matches
+  model: text("model"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const loomPlaybookMatches = pgTable(
+  "loom_playbook_matches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    playbookId: uuid("playbook_id")
+      .notNull()
+      .references(() => loomPlaybooks.id, { onDelete: "cascade" }),
+    narrativeId: uuid("narrative_id")
+      .notNull()
+      .references(() => loomNarratives.id, { onDelete: "cascade" }),
+    matchScore: real("match_score").notNull(),
+    matchedAt: timestamp("matched_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    pairUq: uniqueIndex("loom_playbook_matches_pair_uq").on(t.playbookId, t.narrativeId),
+  })
+);
+
 // --- settings: key/value app config (autonomous toggle, etc.) ---------------
 export const settings = pgTable("settings", {
   key: text("key").primaryKey(),
@@ -450,5 +812,24 @@ export const schema = {
   loomNarratives,
   loomNarrativeMetrics,
   loomNarrativeTransitions,
+  loomEntities,
+  loomInstruments,
+  loomExposures,
+  loomNarrativeEntities,
+  loomPrices,
+  loomEventStudies,
+  loomPositioning,
+  loomRegimes,
+  loomPlaceboRuns,
+  loomPrepositionFlags,
+  loomFraming,
+  loomHypotheses,
+  loomEvidence,
+  loomJudgments,
+  loomBeneficiaries,
+  loomForecasts,
+  loomResolutions,
+  loomPlaybooks,
+  loomPlaybookMatches,
   settings,
 };

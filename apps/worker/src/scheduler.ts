@@ -18,7 +18,7 @@ import { ingestAll, rematchRecent, matchNode } from "@erebus/ingest";
 import { runAlerts } from "./alerts.js";
 import { runGardener } from "@erebus/gardener";
 import { mapUnmappedTheories, refreshMarket, resolveByMarket } from "@erebus/market";
-import { ingestLoom, pullGdelt, runLoomPass } from "@erebus/loom";
+import { ingestLoom, pullGdelt, runLoomPass, runLoomMarketPass } from "@erebus/loom";
 import { llmLive, call, OPUS } from "@erebus/agents";
 import { runCycle } from "./cycle.js";
 import { withinDailyBudget } from "./governors.js";
@@ -260,6 +260,30 @@ export function startScheduler(): SchedulerHandle {
     "none"
   );
 
+  // LOOM Phases 2-3 — the free market pass (prices, detectors, regimes, event
+  // studies, placebo, flags, forecast resolution). No LLM, no embeddings —
+  // ungated like ingest.
+  const loomMarketEvery = minutes("LOOM_MARKET_EVERY_MIN", 360);
+  const loomMarketTick = guarded(
+    "loom-market",
+    async () => {
+      const m = await runLoomMarketPass();
+      if (m.skipped) return { skipped: m.skipped };
+      return {
+        prices: m.prices,
+        positioning: m.positioningRows,
+        insider: m.insiderScored,
+        regimes: m.regimeDays,
+        events: m.eventStudies,
+        placebo: m.placeboRegimes,
+        flags: m.flags,
+        resolved: m.forecastsResolved,
+        errors: m.errors.length,
+      };
+    },
+    "none"
+  );
+
   // Resolution verification: source-verified judge sweeps due theories and
   // audits recent resolutions (twice daily; Sonnet-cheap, budget-gated).
   const verifyEvery = minutes("VERIFY_EVERY_MIN", 720);
@@ -282,6 +306,7 @@ export function startScheduler(): SchedulerHandle {
     setInterval(verifyTick, verifyEvery * MIN),
     setInterval(loomTick, loomEvery * MIN),
     setInterval(loomClusterTick, loomClusterEvery * MIN),
+    setInterval(loomMarketTick, loomMarketEvery * MIN),
   ];
 
   // --- continuous roam: branch back-to-back while enabled --------------------
@@ -330,6 +355,7 @@ export function startScheduler(): SchedulerHandle {
   const marketKickoff = setTimeout(() => void marketTick(), 45_000);
   const loomKickoff = setTimeout(() => void loomTick(), 30_000); // free — safe on every boot
   const loomClusterKickoff = setTimeout(() => void loomClusterTick(), 90_000); // after the first ingest lands
+  const loomMarketKickoff = setTimeout(() => void loomMarketTick(), 150_000); // after entities exist
   scheduleRoam(25_000);
 
   const stop = () => {
@@ -339,6 +365,7 @@ export function startScheduler(): SchedulerHandle {
     clearTimeout(marketKickoff);
     clearTimeout(loomKickoff);
     clearTimeout(loomClusterKickoff);
+    clearTimeout(loomMarketKickoff);
     if (roamTimer) clearTimeout(roamTimer);
     console.log("[scheduler] stopped");
   };

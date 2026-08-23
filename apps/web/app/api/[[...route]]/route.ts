@@ -49,7 +49,16 @@ import { llmLive, runDebate } from "@erebus/agents";
 import { ingestAll, matchNode, rematchRecent } from "@erebus/ingest";
 import { getMarketOverview, mapUnmappedTheories, mapTheory, refreshMarket } from "@erebus/market";
 import { runGameRead, latestGameRead } from "@erebus/gametheory";
-import { ingestLoom, loomStatus, runLoomPass, listLoomNarratives, getLoomNarrative } from "@erebus/loom";
+import {
+  ingestLoom,
+  loomStatus,
+  runLoomPass,
+  runLoomMarketPass,
+  listLoomNarratives,
+  getLoomNarrative,
+  loomScoreboard,
+  generatePlaybooks,
+} from "@erebus/loom";
 import { runShadowRead } from "@erebus/shadowboard";
 import {
   nodeToContent,
@@ -540,6 +549,24 @@ app.get("/loom/narratives/:id", (c) =>
 // (including lifecycle) holds one advisory lock, so overlapping a worker tick
 // makes this a cheap no-op; embeds/labels inside are pause- and budget-gated.
 app.post("/loom/cluster", (c) => guard(c, async () => c.json(await runLoomPass())));
+
+// POST /api/loom/market -> manual market pass (prices/detectors/regimes/event
+// studies/placebo/flags/resolutions — all free, advisory-locked).
+app.post("/loom/market", (c) => guard(c, async () => c.json(await runLoomMarketPass())));
+
+// GET /api/loom/scoreboard -> per-claim-type Brier vs climatology (R6 status).
+app.get("/loom/scoreboard", (c) => guard(c, async () => c.json(await loomScoreboard())));
+
+// POST /api/loom/playbooks { theoryRef } -> M9 red-team playbook generation
+// for one EREBUS theory branch (deep tier — Fable).
+app.post("/loom/playbooks", (c) =>
+  guard(c, async () => {
+    const body = await c.req.json().catch(() => ({}));
+    const theoryRef = typeof body?.theoryRef === "string" ? body.theoryRef.slice(0, 40) : "";
+    if (!theoryRef.trim()) return c.json({ error: "theoryRef required" }, 400);
+    return c.json(await generatePlaybooks(theoryRef.trim()));
+  })
+);
 
 // --- Market correlation -----------------------------------------------------
 // GET /api/market -> catalog quotes + per-theory instrument links & verdicts.

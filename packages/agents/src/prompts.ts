@@ -370,3 +370,97 @@ Return JSON:
   "summary": "two sentences, plain and neutral"
 }`;
 }
+
+// --- LOOM M3: entity extraction (fast tier, per promoted narrative) ---------
+export function loomEntityPrompt(samples: Array<{ title: string; lede: string }>): string {
+  return `You extract market-relevant entities from ONE news narrative for an intelligence system. Below are sample headlines/ledes from the narrative's articles. List the entities central to the story.
+${UNTRUSTED_NOTE}
+
+SAMPLE ARTICLES:
+${samples.map((s, i) => `${i + 1}. ${untrusted(s.title, 200)} — ${untrusted(s.lede, 250)}`).join("\n")}
+
+Rules: only kinds "company" (a specific listed or major private company), "country" (a sovereign state central to the story), "commodity" (oil, gas, gold, copper, wheat, uranium, lithium...). Use the plain canonical name ("Tesla", "Canada", "oil"). salience is 0..1 (how central to the narrative). 2-6 entities; omit incidental mentions.
+
+Return JSON:
+{ "entities": [ { "name": "...", "kind": "company|country|commodity", "salience": 0.0 } ] }`;
+}
+
+// --- LOOM M2: framing extraction (fast tier, sampled) -----------------------
+export function loomFramingPrompt(title: string, lede: string): string {
+  return `You extract the narrative FRAME of one news article using fixed slots. Answer from the text alone; use "" for slots the text does not fill.
+${UNTRUSTED_NOTE}
+
+ARTICLE: ${untrusted(title, 250)}
+LEDE: ${untrusted(lede, 500)}
+
+Return JSON:
+{
+  "protagonist": "who the story positions as the actor to root for or follow",
+  "antagonist": "who or what the story positions as the threat's source",
+  "threat": "the danger or problem the story foregrounds",
+  "remedy": "the solution or response the story points toward",
+  "urgency": "low" | "medium" | "high",
+  "implied_action": "what a reader/investor/policymaker is implicitly nudged to do"
+}`;
+}
+
+// --- LOOM M8: ACH evidence marks (judgment tier, per promoted narrative) ----
+// Fixed hypothesis taxonomy (spec M8). H1 organic is the default prior.
+export const LOOM_HYPOTHESES: Record<string, string> = {
+  H1: "organic newsworthiness",
+  H2: "editorial herding / attention economics",
+  H3: "access journalism / official seeding",
+  H4: "commercial PR push",
+  H5: "state information operation",
+  H6: "market manipulation (pump or short-and-distort)",
+  H7: "policy ground-preparation",
+};
+
+export function loomAchPrompt(
+  narrative: { label: string; summary: string; frame: string },
+  evidence: Array<{ kind: string; text: string }>
+): string {
+  return `You run an Analysis of Competing Hypotheses (ACH) on why ONE news narrative is being pushed. Mark each evidence item Consistent (C), Inconsistent (I), or Neutral (N) against EACH hypothesis. Discipline: H1 (organic) is the default prior — mark against it honestly rather than hunting for intrigue; wire syndication and editorial herding explain most coordination. The least-inconsistent hypothesis should win, not the most exciting.
+${UNTRUSTED_NOTE}
+
+NARRATIVE: ${untrusted(narrative.label, 200)}
+SUMMARY: ${untrusted(narrative.summary, 400)}
+DOMINANT FRAME: ${untrusted(narrative.frame, 300)}
+
+HYPOTHESES:
+${Object.entries(LOOM_HYPOTHESES).map(([k, v]) => `${k}: ${v}`).join("\n")}
+
+EVIDENCE (observable measurements, not claims):
+${evidence.map((e, i) => `${i + 1}. [${e.kind}] ${untrusted(e.text, 300)}`).join("\n")}
+
+Return JSON:
+{
+  "marks": [ { "evidence": 1, "H1": "C|I|N", "H2": "C|I|N", "H3": "C|I|N", "H4": "C|I|N", "H5": "C|I|N", "H6": "C|I|N", "H7": "C|I|N", "rationale": "one sentence" } ],
+  "falsifiers": ["an OBSERVABLE that, if seen, downgrades the leading judgment", "..."],
+  "beneficiaries": [ { "name": "who gains if the intended reaction happens", "rationale": "one sentence", "falsifier": "observable that would clear them" } ]
+}
+Provide 2-4 falsifiers and 1-3 beneficiaries. Every beneficiary needs its own falsifier.`;
+}
+
+// --- LOOM M9: playbook inversion (deep tier, red-team pass) -----------------
+export function loomPlaybookPrompt(theory: { id: string; question: string; outcome: string }): string {
+  return `Red-team exercise for a forecasting system: IF an interested actor wanted the outcome below to materialize, what would the supporting NARRATIVE CAMPAIGN look like in the press BEFORE it happened? Design 2-3 distinct playbooks. Be concrete and machine-matchable — these become watch patterns scored against real narrative clusters. This is a hypothesis-generation exercise about observable media patterns, never an accusation.
+
+THEORY ${theory.id}: ${theory.question}
+OUTCOME: ${theory.outcome}
+
+Return JSON:
+{
+  "playbooks": [
+    {
+      "outcomeDesc": "one sentence: the campaign's goal",
+      "pattern": {
+        "themes": ["3-6 theme keywords the campaign's articles would carry"],
+        "actors": ["actors/entities the articles would foreground"],
+        "framingSignature": "the tell-tale frame: protagonist/antagonist/threat/remedy shape",
+        "sequencing": "expected order: which outlet types move first, timing vs known catalysts"
+      }
+    }
+  ]
+}`;
+}
