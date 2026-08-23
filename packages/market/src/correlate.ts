@@ -22,6 +22,8 @@ export async function refreshMarket(): Promise<{ checked: number; signals: numbe
       name: nodeInstruments.name,
       expectation: nodeInstruments.expectation,
       merged: nodes.mergedInto,
+      resolved: nodes.resolved,
+      state: nodes.state,
     })
     .from(nodeInstruments)
     .innerJoin(nodes, eq(nodes.id, nodeInstruments.nodeId));
@@ -36,7 +38,8 @@ export async function refreshMarket(): Promise<{ checked: number; signals: numbe
   let checked = 0;
 
   for (const l of links) {
-    if (l.merged || !l.nodeId) continue;
+    // Resolved/merged/dormant theories are finished — no new market evidence.
+    if (!l.nodeId || l.merged || l.resolved || l.state === "dormant" || l.state === "merged") continue;
     const c = candles.get(l.symbol);
     if (!c || c.closes.length < 2) continue;
     checked++;

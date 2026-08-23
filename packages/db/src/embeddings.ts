@@ -19,19 +19,43 @@ function offlineEmbed(text: string): number[] {
   return vec.map((v) => v / norm);
 }
 
+// Transient provider errors retry with backoff (mirrors the LLM client) —
+// embeds often run AFTER a paid LLM call, so a single 429 must not discard
+// paid output (review: the throw-without-retry version created a burn loop).
+async function retryFetch(fn: () => Promise<Response>, label: string): Promise<Response> {
+  let last: Response | null = null;
+  for (let n = 0; n <= 2; n++) {
+    const res = await fn();
+    if (res.ok) return res;
+    last = res;
+    if (res.status === 429 || res.status >= 500) {
+      await new Promise((r) => setTimeout(r, 2 ** n * 700));
+      continue;
+    }
+    break; // 4xx other than 429: not retryable
+  }
+  // Provider ERROR must throw, not silently store a hash-space vector: a stored
+  // offline embedding is permanent corpus poison (mismatched space forever),
+  // whereas a thrown error just defers the item to the next tick.
+  throw new Error(`${label} embeddings ${last?.status ?? "error"}`);
+}
+
 async function openaiEmbed(text: string): Promise<number[]> {
   const key = process.env.OPENAI_API_KEY;
-  if (!key) return offlineEmbed(text);
-  const res = await fetch("https://api.openai.com/v1/embeddings", {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-    body: JSON.stringify({
-      input: text.slice(0, 8000),
-      model: process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small",
-      dimensions: EMBEDDING_DIM,
-    }),
-  });
-  if (!res.ok) return offlineEmbed(text);
+  if (!key) return offlineEmbed(text); // zero-key mode is deliberate
+  const res = await retryFetch(
+    () =>
+      fetch("https://api.openai.com/v1/embeddings", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+        body: JSON.stringify({
+          input: text.slice(0, 8000),
+          model: process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small",
+          dimensions: EMBEDDING_DIM,
+        }),
+      }),
+    "openai"
+  );
   const j = (await res.json()) as { data: Array<{ embedding: number[] }> };
   return j.data[0]!.embedding;
 }
@@ -39,16 +63,19 @@ async function openaiEmbed(text: string): Promise<number[]> {
 async function voyageEmbed(text: string): Promise<number[]> {
   const key = process.env.VOYAGE_API_KEY;
   if (!key) return offlineEmbed(text);
-  const res = await fetch("https://api.voyageai.com/v1/embeddings", {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-    body: JSON.stringify({
-      input: text.slice(0, 8000),
-      model: process.env.VOYAGE_MODEL || "voyage-3.5",
-      output_dimension: EMBEDDING_DIM,
-    }),
-  });
-  if (!res.ok) return offlineEmbed(text);
+  const res = await retryFetch(
+    () =>
+      fetch("https://api.voyageai.com/v1/embeddings", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+        body: JSON.stringify({
+          input: text.slice(0, 8000),
+          model: process.env.VOYAGE_MODEL || "voyage-3.5",
+          output_dimension: EMBEDDING_DIM,
+        }),
+      }),
+    "voyage"
+  );
   const j = (await res.json()) as { data: Array<{ embedding: number[] }> };
   return j.data[0]!.embedding;
 }

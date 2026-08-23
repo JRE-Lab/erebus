@@ -27,11 +27,14 @@ export async function adjudicate(
 ): Promise<{ resolved: true; outcome: boolean; brier: number } | null> {
   const [node] = await db.select().from(nodes).where(eq(nodes.id, nodeId)).limit(1);
   if (!node) return null;
-  if (node.resolved) return null; // idempotent — never re-resolve (operator vs market race)
+  if (node.resolved) return null; // fast path — already resolved
   const actual = happened ? 1 : 0;
   const p = node.probability ?? (node.confirmation + 1) / 2;
   const brier = Math.pow(p - actual, 2);
-  await db
+  // ATOMIC: the `resolved IS NULL` predicate closes the operator/market/verifier
+  // race — the second concurrent resolver updates 0 rows and returns null
+  // instead of overwriting the first resolution with a conflicting outcome.
+  const updated = await db
     .update(nodes)
     .set({
       resolved: true,
@@ -41,7 +44,9 @@ export async function adjudicate(
       state: happened ? "resolved_true" : "resolved_false",
       updatedAt: new Date(),
     })
-    .where(eq(nodes.id, nodeId));
+    .where(and(eq(nodes.id, nodeId), isNull(nodes.resolved)))
+    .returning({ id: nodes.id });
+  if (!updated.length) return null; // lost the race — someone else resolved it
   await recordEvent({
     nodeId,
     kind: "resolved",

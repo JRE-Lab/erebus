@@ -18,6 +18,7 @@ import { ingestAll, rematchRecent, matchNode } from "@erebus/ingest";
 import { runAlerts } from "./alerts.js";
 import { runGardener } from "@erebus/gardener";
 import { mapUnmappedTheories, refreshMarket, resolveByMarket } from "@erebus/market";
+import { ingestLoom, pullGdelt } from "@erebus/loom";
 import { llmLive, call, OPUS } from "@erebus/agents";
 import { runCycle } from "./cycle.js";
 import { withinDailyBudget } from "./governors.js";
@@ -222,6 +223,19 @@ export function startScheduler(): SchedulerHandle {
   const alertsEvery = minutes("ALERTS_EVERY_MIN", 10);
   const alertsTick = guarded("alerts", () => runAlerts(), "none");
 
+  // LOOM Phase 0: wire + article ingestion with dual timestamps. Entirely free
+  // (HTTP + hashing, no LLM/embeddings) — ungated so the sensor never sleeps.
+  const loomEvery = minutes("LOOM_INGEST_EVERY_MIN", 15);
+  const loomTick = guarded(
+    "loom",
+    async () => {
+      const r = await ingestLoom();
+      const g = await pullGdelt();
+      return { wires: r.wires, articles: r.articles, gdelt: g.enabled ? g.pulled : "off", errors: r.errors.length };
+    },
+    "none"
+  );
+
   // Resolution verification: source-verified judge sweeps due theories and
   // audits recent resolutions (twice daily; Sonnet-cheap, budget-gated).
   const verifyEvery = minutes("VERIFY_EVERY_MIN", 720);
@@ -242,6 +256,7 @@ export function startScheduler(): SchedulerHandle {
     setInterval(genesisTick, genesisEvery * MIN),
     setInterval(alertsTick, alertsEvery * MIN),
     setInterval(verifyTick, verifyEvery * MIN),
+    setInterval(loomTick, loomEvery * MIN),
   ];
 
   // --- continuous roam: branch back-to-back while enabled --------------------
@@ -273,8 +288,10 @@ export function startScheduler(): SchedulerHandle {
         }
       }
       console.log(`[scheduler] roam ${r.status}${r.nodeId ? ` ${r.nodeId}` : ""} -> ${r.expanded} children`);
-      // fast cadence when productive, slower when idle/blocked
-      scheduleRoam(r.status === "expanded" ? 2_000 : 12_000);
+      // Fast cadence ONLY when children were actually produced. An "expanded"
+      // result with 0 children (parse failure, outage) must back off — the old
+      // check let roam spin at 2s through a total LLM outage (deep review).
+      scheduleRoam(r.status === "expanded" && r.expanded > 0 ? 2_000 : 12_000);
     } catch (e) {
       console.warn("[scheduler] continuous roam error:", (e as Error).message);
       scheduleRoam(12_000);
@@ -286,6 +303,7 @@ export function startScheduler(): SchedulerHandle {
     void ingestTick();
   }, 20_000);
   const marketKickoff = setTimeout(() => void marketTick(), 45_000);
+  const loomKickoff = setTimeout(() => void loomTick(), 30_000); // free — safe on every boot
   scheduleRoam(25_000);
 
   const stop = () => {
@@ -293,6 +311,7 @@ export function startScheduler(): SchedulerHandle {
     for (const t of timers) clearInterval(t);
     clearTimeout(kickoff);
     clearTimeout(marketKickoff);
+    clearTimeout(loomKickoff);
     if (roamTimer) clearTimeout(roamTimer);
     console.log("[scheduler] stopped");
   };

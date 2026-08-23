@@ -13,9 +13,28 @@ import {
 import type { NodeRow, TreeNode } from "./types.js";
 
 const MAX_DEPTH = Number(process.env.MAX_DEPTH || 8);
+const MAX_CHILDREN = Number(process.env.MAX_CHILDREN || 12); // per-node fan-out cap
 
 function shortId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 8)}${Date.now().toString(36).slice(-3)}`;
+}
+
+// LLM-supplied horizon strings are untrusted: an unparseable date must become
+// null, not an Invalid Date that throws during insert AFTER the tokens are paid.
+function safeDate(s: string | null | undefined): Date | null {
+  if (!s) return null;
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// Mark a node permanently un-expandable (max depth / max children) so the
+// selectors stop re-picking it — the deep review's roam-deadlock fix.
+async function markExpandBlocked(nodeId: string): Promise<void> {
+  try {
+    await db.update(nodes).set({ expandBlocked: true, updatedAt: new Date() }).where(eq(nodes.id, nodeId));
+  } catch {
+    /* best-effort */
+  }
 }
 
 async function depthOf(nodeId: string): Promise<number> {
@@ -75,7 +94,7 @@ export async function createForecast(
       rationale: data.rationale ?? null,
       indicators: data.indicators ?? [],
       falsifiers: data.falsifiers ?? [],
-      horizon: data.horizon ? new Date(data.horizon) : null,
+      horizon: safeDate(data.horizon),
       domains: data.domains ?? [],
       confidence: data.confidence ?? 0.5,
       origin: opts.origin ?? "user",
@@ -97,51 +116,90 @@ export async function expandForward(
   origin: "user" | "erebus" = "user"
 ): Promise<{ children: NodeRow[]; cost: number; blocked?: string }> {
   const depth = await depthOf(nodeId);
-  if (depth + 1 > MAX_DEPTH) return { children: [], cost: 0, blocked: `max depth ${MAX_DEPTH}` };
+  if (depth + 1 > MAX_DEPTH) {
+    await markExpandBlocked(nodeId); // selectors must never pick this node again
+    return { children: [], cost: 0, blocked: `max depth ${MAX_DEPTH}` };
+  }
 
   const [node] = await db.select().from(nodes).where(eq(nodes.id, nodeId)).limit(1);
   if (!node) return { children: [], cost: 0, blocked: "node not found" };
 
+  // Per-node fan-out cap: without it a sticky selector can pile unbounded
+  // children onto one node (deep-review finding).
+  const preExisting = await db.select({ id: nodes.id }).from(nodes).where(eq(nodes.parentId, nodeId));
+  if (preExisting.length >= MAX_CHILDREN) {
+    await markExpandBlocked(nodeId);
+    return { children: [], cost: 0, blocked: `max children ${MAX_CHILDREN}` };
+  }
+
   const fallback = { children: [] as ForecastShape[] };
-  const { data, cost } = await callJSON<{ children: ForecastShape[] }>(
+  const { data, cost, offline, parsed } = await callJSON<{ children: ForecastShape[] }>(
     expandForwardPrompt({ question: node.question, outcome: node.outcome, depth }),
     fallback,
     { tier: "opus", agent: "expand-forward", targetNode: nodeId, maxTokens: 3000 }
   );
+  // Offline/paused/budget/parse-fallback: report blocked so roam loops back off
+  // instead of counting an empty expansion as "productive". No rotation stamp —
+  // the node stays at the front of the queue for a real retry.
+  if (offline) return { children: [], cost, blocked: "llm unavailable" };
+  if (!parsed) return { children: [], cost, blocked: "llm parse failure" };
 
+  // Re-query children AFTER the (multi-second) LLM call: a concurrent expand or
+  // pursue on the same node during the call would otherwise collide on the
+  // count-derived child id and its paid child would be silently dropped.
   const existing = await db.select({ id: nodes.id }).from(nodes).where(eq(nodes.parentId, nodeId));
   let n = existing.length;
   const inserted: NodeRow[] = [];
+  let embedFailure: string | undefined;
 
-  for (const child of data.children ?? []) {
+  // Cap the batch so the fan-out limit can't be overshot by batch-size-1.
+  const room = Math.max(0, MAX_CHILDREN - n);
+  for (const child of (data.children ?? []).slice(0, room)) {
     if (!child.question || !child.outcome) continue;
     n++;
     const childId = `${nodeId}.${n}`;
-    const emb = await embedExpr(`${child.question}\n${child.outcome}`);
-    const [row] = await db
-      .insert(nodes)
-      .values({
-        id: childId,
-        question: child.question,
-        outcome: child.outcome,
-        rationale: child.rationale ?? null,
-        indicators: child.indicators ?? [],
-        falsifiers: child.falsifiers ?? [],
-        horizon: child.horizon ? new Date(child.horizon) : null,
-        domains: child.domains ?? node.domains ?? [],
-        parentId: nodeId,
-        branchLabel: String.fromCharCode(64 + n),
-        origin,
-        embedding: emb,
-      })
-      .onConflictDoNothing()
-      .returning();
-    if (row) {
-      inserted.push(row);
-      await recordEvent({ nodeId: childId, kind: "created", causeType: "job", promptVersion: PROMPT_VERSION });
+    try {
+      const emb = await embedExpr(`${child.question}\n${child.outcome}`);
+      const [row] = await db
+        .insert(nodes)
+        .values({
+          id: childId,
+          question: child.question,
+          outcome: child.outcome,
+          rationale: child.rationale ?? null,
+          indicators: child.indicators ?? [],
+          falsifiers: child.falsifiers ?? [],
+          horizon: safeDate(child.horizon),
+          domains: child.domains ?? node.domains ?? [],
+          parentId: nodeId,
+          branchLabel: String.fromCharCode(64 + n),
+          origin,
+          embedding: emb,
+        })
+        .onConflictDoNothing()
+        .returning();
+      if (row) {
+        inserted.push(row);
+        await recordEvent({ nodeId: childId, kind: "created", causeType: "job", promptVersion: PROMPT_VERSION });
+      }
+    } catch (e) {
+      // An embeddings-provider outage must not discard the whole paid batch or
+      // spin the selector (review: paid-then-throw burn loop). Keep what we
+      // inserted, stop, and report — the stamp below still rotates the node.
+      embedFailure = (e as Error).message.slice(0, 80);
+      break;
     }
   }
-  return { children: inserted, cost };
+  // Rotation stamp: selectors order by last_expanded_at so an expanded node
+  // yields to the rest of the frontier instead of being re-picked immediately.
+  try {
+    await db.update(nodes).set({ lastExpandedAt: new Date() }).where(eq(nodes.id, nodeId));
+  } catch {
+    /* best-effort */
+  }
+  return embedFailure
+    ? { children: inserted, cost, blocked: `embeddings unavailable: ${embedFailure}` }
+    : { children: inserted, cost };
 }
 
 export async function synthesizeBranches(
@@ -168,7 +226,7 @@ export async function synthesizeBranches(
       rationale: data.rationale ?? null,
       indicators: data.indicators ?? [],
       falsifiers: data.falsifiers ?? [],
-      horizon: data.horizon ? new Date(data.horizon) : null,
+      horizon: safeDate(data.horizon),
       domains: data.domains ?? [],
       synthesizedFrom: nodeIds,
       embedding: emb,
@@ -222,13 +280,24 @@ export async function pursueDirection(
     horizon: null as string | null,
     domains: [] as string[],
   };
-  const { data, cost } = await callJSON<typeof fallback>(
+  const { data, cost, offline } = await callJSON<typeof fallback>(
     pursuePrompt({ question: parent.question, outcome: parent.outcome }, direction),
     fallback,
     { tier: "opus", agent: "pursue", targetNode: nodeId, maxTokens: 2500 }
   );
+  // Never persist a fallback stub as a real branch (deep-review finding: paused/
+  // offline pursues were inserting "[offline] forecast pending" children).
+  if (offline || !data.outcome || data.outcome.startsWith("[offline]")) {
+    return { node: null, analysis: "", cost, blocked: "llm unavailable" };
+  }
 
   const existing = await db.select({ id: nodes.id }).from(nodes).where(eq(nodes.parentId, nodeId));
+  // Same fan-out cap as expandForward — user/shadow-driven pursues must not
+  // grow a node arbitrarily past the limit either.
+  if (existing.length >= MAX_CHILDREN) {
+    await markExpandBlocked(nodeId);
+    return { node: null, analysis: data.analysis ?? "", cost, blocked: `max children ${MAX_CHILDREN}` };
+  }
   const n = existing.length + 1;
   const childId = `${nodeId}.${n}`;
   const emb = await embedExpr(`${data.question}\n${data.outcome}`);
@@ -241,7 +310,7 @@ export async function pursueDirection(
       rationale: data.rationale ?? null,
       indicators: data.indicators ?? [],
       falsifiers: data.falsifiers ?? [],
-      horizon: data.horizon ? new Date(data.horizon) : null,
+      horizon: safeDate(data.horizon),
       domains: data.domains ?? parent.domains ?? [],
       parentId: nodeId,
       branchLabel: String.fromCharCode(64 + n),

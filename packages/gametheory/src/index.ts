@@ -84,16 +84,22 @@ export async function runGameRead(nodeId: string): Promise<GameReadResult> {
     EMPTY_GAME,
     { tier: "opus", agent: "game-read", targetNode: nodeId }
   );
+  // Never persist the EMPTY_GAME fallback as a real analysis (deep-review
+  // finding: parse failures were writing fabricated stability=0.5 rows).
+  if (read.offline || !read.parsed) {
+    return { gameRead: null, cost: read.cost, offline: read.offline };
+  }
   const g = read.data;
   const stability = clamp01(g.stability);
 
-  // 2) Decision layer (Sonnet — derivative of the read).
+  // 2) Decision layer (Sonnet — derivative of the read). A fallback decision is
+  // stored as EMPTY (nulls), never as fabricated content.
   const decision = await callJSON<DecisionShape>(
     decidePrompt({ question: node.question, outcome: node.outcome }, JSON.stringify(g)),
     EMPTY_DECISION,
     { tier: "sonnet", agent: "game-decide", targetNode: nodeId }
   );
-  const d = decision.data;
+  const d = decision.offline || !decision.parsed ? EMPTY_DECISION : decision.data;
   const cost = read.cost + decision.cost;
   const offline = read.offline;
 

@@ -17,6 +17,7 @@
     "@erebus/db": "workspace:*",
     "@erebus/gametheory": "workspace:*",
     "@erebus/ingest": "workspace:*",
+    "@erebus/loom": "workspace:*",
     "@erebus/market": "workspace:*",
     "@erebus/shadowboard": "workspace:*",
     "@hono/node-server": "^1.13.7",

@@ -50,6 +50,20 @@
       "when": 1783027240786,
       "tag": "0006_old_carmella_unuscione",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787503985913,
+      "tag": "0007_stale_madripoor",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787504944832,
+      "tag": "0008_misty_layla_miller",
+      "breakpoints": true
     }
   ]
 }

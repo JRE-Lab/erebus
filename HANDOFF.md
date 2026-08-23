@@ -29,7 +29,7 @@ content.
 - **Embeddings:** `EMBEDDING_PROVIDER=openai` on the VPS (`text-embedding-3-small`, 1536); deterministic offline fallback exists.
 
 ### Packages
-`db` (schema/migrate/settings/embeddings/vector) · `agents` (LLM client + prompts + debate) · `core` (tree ops, greening state machine, autonomy/roam, scoring) · `ingest` (RSS + signal↔node matching) · `market` (correlation) · `gametheory` (strategic layer) · `shadowboard` (deception) · `gardener` (prune/merge) · `evals` · `content` (profit engine). Apps: `web`, `worker`.
+`db` (schema/migrate/settings/embeddings/vector + **budget governor**) · `agents` (LLM client + prompts + debate) · `core` (tree ops, greening state machine, autonomy/roam, scoring, verify) · `ingest` (RSS + signal↔node matching) · `market` (correlation) · `gametheory` (strategic layer) · `shadowboard` (deception) · `gardener` (prune/merge) · `evals` · `content` (profit engine) · **`loom` (narrative intelligence, Phase 0)**. Apps: `web`, `worker`.
 
 ---
 
@@ -71,9 +71,23 @@ EREBUS births NEW root theories from the signal stream — no longer only expand
 ### Shadow Board (`/shadow`)
 Deception/tradecraft read; can spawn a contested counter-forecast — now **connected into the tree** (`parentId` = source, `origin:"shadow"`, ⚡ branch label) and rendered in NodeDetail's "Strategic links".
 
+### Source-verified resolutions
+`POST /api/verify` / Explorer **Verify all** button + worker `verify` tick (12h): sweeps past-horizon theories, has the fast tier judge happened / did-not-happen / unclear against the node's own matched evidence, resolves with a Brier score. Per-node 3-day backoff via `nodes.last_verified_at` (migration 0008 — deliberately separate from `last_validated_at`, which is the gardener's decay clock).
+
+### LOOM (narrative intelligence, Phase 0)
+`packages/loom` — tracks *how stories move*, not just what happened. R1 dual timestamps on everything: `published_at` (claimed) vs `first_seen_at` (observed). Ingests **wire releases** (PR Newswire, GlobeNewswire) + **outlet articles** (BBC / Al Jazeera / Guardian world; override via `LOOM_WIRE_FEEDS`/`LOOM_ARTICLE_FEEDS`), canonical-URL + text-hash deduped into `loom_wire_releases`/`loom_articles` (migration 0007). Free (no LLM). Worker `loom` tick 15m (ungated); `GET /api/loom/status`, `POST /api/loom/ingest`. GDELT GKG via BigQuery is stubbed — activates with `GDELT_BQ_ENABLED=1` + `GDELT_BQ_PROJECT` + `GOOGLE_APPLICATION_CREDENTIALS` (needs a GCP project). Phase 1 (clustering → narratives → lifecycle states) is next.
+
 ### Cost control
 - **Pause kill-switch** (`settings.paused`, header button): instant full stop on ALL paid calls (LLM + embeddings + images).
-- **Budgets** (worker only): `CYCLE_BUDGET_USD` ($2/cycle), `DAILY_BUDGET_USD` ($15/day hard cap on the autonomous loop). ⚠️ Manual/Studio actions are gated by pause only, NOT the daily cap.
+- **Shared daily budget governor** (`@erebus/db/budget.ts`, enforced inside `agents.call()` itself): `DAILY_BUDGET_USD` (default `CYCLE_BUDGET_USD × 10`) caps **everything** — worker ticks, web API, Studio images/voice — across all processes, reading the `exploration_jobs` ledger. **Fails closed** after 3 consecutive ledger-read failures. `CYCLE_BUDGET_USD` still bounds a single autonomous cycle.
+
+### Hardening (2026-08 review PR)
+An 80-agent adversarial review (report: `docs/CODE_REVIEW_2026-07.md`) drove a hardening pass. The load-bearing contracts:
+- **`callJSON` returns `{data, cost, offline, parsed}`** — every persist site checks `offline || !parsed` and *skips/blocks* instead of writing fallback stubs (matching, game reads + decisions, shadow reads, debate rounds, market mapping, genesis, expansion). Paused/offline operation no longer poisons the evidence corpus.
+- **Expansion is failure-aware:** parse failure / offline / embedding outage → `expand_blocked` with a reason, `MAX_CHILDREN=12` cap, `last_expanded_at` rotation; embeddings retry 429/5xx with backoff then **throw** (never silently store hash vectors).
+- **Auth fails closed:** blank `EREBUS_PASS` → 503 (set `EREBUS_ALLOW_NO_AUTH=1` for local dev); constant-time compare; cross-site non-GET requests are rejected (CSRF).
+- **API hygiene:** every numeric param clamped, embeddings stripped from all responses, 500s return an opaque ref (real error server-side only).
+- **Untrusted-input wrapping:** signal titles/summaries/evidence go into prompts through `untrusted()` (tag-stripped, truncated) — prompt-injection dampening.
 
 ---
 
@@ -84,18 +98,22 @@ Deception/tradecraft read; can spawn a contested counter-forecast — now **conn
   1. `tar czf /tmp/erebus-deploy.tgz --exclude node_modules --exclude .next --exclude .git --exclude .env .`
   2. `scp` to `/tmp` on the VPS, `tar xzf … -C /opt/erebus` (preserves `.env`).
   3. `docker compose -f docker-compose.prod.yml build web worker`
-  4. `docker compose -f docker-compose.prod.yml run --rm web sh -lc 'cd /app && pnpm --filter @erebus/db migrate'`
-  5. `docker compose -f docker-compose.prod.yml up -d web worker`
+  4. `docker compose -f docker-compose.prod.yml stop worker web` — **stop BEFORE migrating**: index-creating migrations race a live worker.
+  5. `docker compose -f docker-compose.prod.yml run --rm web sh -lc 'cd /app && pnpm --filter @erebus/db migrate'`
+  6. `docker compose -f docker-compose.prod.yml up -d web worker`
 - **Backups:** nightly `pg_dump` to `/opt/erebus-backups` via cron (keep 14).
 
 ### Key env vars (`/opt/erebus/.env`, chmod 600)
-`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (LLM + images + embeddings), `EREBUS_USER`/`EREBUS_PASS`, `POSTGRES_PASSWORD`, `EMBEDDING_PROVIDER=openai`, `LLM_PROVIDER=auto`, budgets/cadences (`*_BUDGET_USD`, `*_EVERY_MIN`), `OPENAI_IMAGE_MODEL=gpt-image-1`, `ELEVENLABS_API_KEY` (optional — voice), `MARKET_MOVE_PCT`/`MARKET_WINDOW_DAYS` (optional).
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (LLM + images + embeddings), `EREBUS_USER`/`EREBUS_PASS` (blank pass = 503; `EREBUS_ALLOW_NO_AUTH=1` for open local dev), `POSTGRES_PASSWORD`, `EMBEDDING_PROVIDER=openai`, `LLM_PROVIDER=auto`, budgets/cadences (`*_BUDGET_USD`, `*_EVERY_MIN`), `OPENAI_IMAGE_MODEL=gpt-image-1`, `ELEVENLABS_API_KEY` (optional — voice), `MARKET_MOVE_PCT`/`MARKET_WINDOW_DAYS` (optional), LOOM: `LOOM_INGEST_EVERY_MIN` / `LOOM_WIRE_FEEDS` / `LOOM_ARTICLE_FEEDS` / `GDELT_BQ_*` (optional).
+
+⚠️ **The Anthropic key has been 401-dead since ~early July** — everything runs on the OpenAI fallback (Fable 5 never actually serves). Create a fresh key and install it via the `erebus-keys.env` hand-off flow (fill the file, say "keys ready" — do NOT attach it to chat).
 
 ---
 
 ## 5. Roadmap (designed, not yet built)
 
-From the game-theory design panel + subsystem audit, in priority order:
+From the game-theory design panel + subsystem audit + LOOM spec, in priority order:
+- **LOOM Phase 1** — cluster wire/article stream into *narratives* with a lifecycle machine (emerging → amplifying → contested → saturated → decayed), read-only narrative list in the UI; then Phases 2+ (laundering detection, narrative↔theory greening).
 - **Equilibrium-break & tripwire alerts** — a live rail that fires when a corroborated node destabilizes or a decision's tripwire greens.
 - **Value-of-Information ranker** — roam toward the most decision-relevant uncertainty, not the most-confirmed node.
 - **Position sizer** — fractional-Kelly read-only sizing for instrument-linked nodes (never auto-trade).

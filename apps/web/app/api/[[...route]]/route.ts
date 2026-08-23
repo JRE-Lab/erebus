@@ -49,6 +49,7 @@ import { llmLive, runDebate } from "@erebus/agents";
 import { ingestAll, matchNode, rematchRecent } from "@erebus/ingest";
 import { getMarketOverview, mapUnmappedTheories, mapTheory, refreshMarket } from "@erebus/market";
 import { runGameRead, latestGameRead } from "@erebus/gametheory";
+import { ingestLoom, loomStatus } from "@erebus/loom";
 import { runShadowRead } from "@erebus/shadowboard";
 import {
   nodeToContent,
@@ -66,15 +67,32 @@ export const dynamic = "force-dynamic";
 
 // --- helpers ----------------------------------------------------------------
 
-// Uniform 500 wrapper. Each handler body is an async thunk; any throw becomes a
-// JSON 500 with the message (never a raw stack to the client).
+// Uniform 500 wrapper. Real errors go to the server log with a reference id;
+// clients get a generic message (deep-review: raw DB/provider messages were
+// leaking connection strings, model ids, and internals to the browser).
 async function guard(c: Context, fn: () => Promise<Response>): Promise<Response> {
   try {
     return await fn();
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return c.json({ error: message }, 500);
+    const ref = Math.random().toString(36).slice(2, 10);
+    console.error(`[api ${ref}]`, err instanceof Error ? err.message : String(err));
+    return c.json({ error: `internal error (ref ${ref})` }, 500);
   }
+}
+
+// Every numeric knob from a client gets clamped — unbounded params were the
+// largest single-request financial exposure (debate rounds, rematch limit).
+function clampInt(v: unknown, lo: number, hi: number, dflt: number): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return dflt;
+  return Math.max(lo, Math.min(hi, Math.trunc(n)));
+}
+
+// The 1536-dim embedding never belongs in an API response (the Explorer was
+// pulling every node's vector on a 10s poll — pure bandwidth waste).
+function stripEmbedding<T extends { embedding?: unknown }>(row: T): Omit<T, "embedding"> {
+  const { embedding: _e, ...rest } = row;
+  return rest;
 }
 
 // --- app --------------------------------------------------------------------
@@ -100,7 +118,7 @@ app.put("/paused", (c) =>
 );
 
 // GET /api/nodes -> all nodes (flat).
-app.get("/nodes", (c) => guard(c, async () => c.json(await listNodes())));
+app.get("/nodes", (c) => guard(c, async () => c.json((await listNodes()).map(stripEmbedding))));
 
 // GET /api/nodes/:id -> node + full provenance bundle.
 app.get("/nodes/:id", (c) =>
@@ -142,7 +160,7 @@ app.get("/nodes/:id", (c) =>
     const game_read = await latestGameRead(id);
 
     return c.json({
-      node,
+      node: stripEmbedding(node),
       signal_matches: matches,
       debates: nodeDebates,
       shadow_reads: reads,
@@ -158,7 +176,7 @@ app.get("/tree", (c) =>
   guard(c, async () => {
     const root = c.req.query("root");
     const rows = root ? await getSubtree(root) : await listNodes();
-    return c.json(rows);
+    return c.json(rows.map(stripEmbedding));
   })
 );
 
@@ -206,7 +224,7 @@ app.post("/nodes/:id/pursue", (c) =>
 
 // POST /api/rematch?limit= -> re-judge recent signals against current nodes.
 app.post("/rematch", (c) =>
-  guard(c, async () => c.json(await rematchRecent(Number(c.req.query("limit")) || 60)))
+  guard(c, async () => c.json(await rematchRecent(clampInt(c.req.query("limit"), 1, 200, 60))))
 );
 
 // POST /api/roam -> one autonomous step now (EREBUS picks a node + branches it).
@@ -269,7 +287,7 @@ app.put("/autonomous", (c) =>
 app.post("/nodes/:id/debate", (c) =>
   guard(c, async () => {
     const body = await c.req.json().catch(() => ({}));
-    const rounds = Number.isFinite(Number(body?.rounds)) ? Number(body.rounds) : 1;
+    const rounds = clampInt(body?.rounds, 1, 3, 1); // each round = 3 deep-tier calls
     const result = await runDebate(c.req.param("id"), rounds);
     if (!result) return c.json({ error: "node not found" }, 404);
     return c.json(result);
@@ -322,7 +340,7 @@ app.get("/calibration", (c) => guard(c, async () => c.json(await calibrationStat
 app.post("/verify-resolutions", (c) =>
   guard(c, async () => {
     const body = await c.req.json().catch(() => ({}));
-    return c.json(await verifyResolutions({ limit: Number(body?.limit) || 20 }));
+    return c.json(await verifyResolutions({ limit: clampInt(body?.limit, 1, 40, 20) }));
   })
 );
 
@@ -339,9 +357,9 @@ app.post("/synthesize", (c) =>
 // GET /api/signals -> most recent ingested signals.
 app.get("/signals", (c) =>
   guard(c, async () => {
-    const limit = Math.min(Number(c.req.query("limit")) || 50, 200);
+    const limit = clampInt(c.req.query("limit"), 1, 200, 50);
     const rows = await db.select().from(signals).orderBy(desc(signals.ingestedAt)).limit(limit);
-    return c.json(rows);
+    return c.json(rows.map(stripEmbedding));
   })
 );
 
@@ -374,10 +392,16 @@ app.get("/search", (c) =>
     return c.json({
       query: q,
       nodes: nodeHits
-        .map((h) => ({ distance: h.distance, node: nodeById.get(h.id) ?? null }))
+        .map((h) => {
+          const n = nodeById.get(h.id);
+          return { distance: h.distance, node: n ? stripEmbedding(n) : null };
+        })
         .filter((h) => h.node),
       signals: signalHits
-        .map((h) => ({ distance: h.distance, signal: signalById.get(h.id) ?? null }))
+        .map((h) => {
+          const s2 = signalById.get(h.id);
+          return { distance: h.distance, signal: s2 ? stripEmbedding(s2) : null };
+        })
         .filter((h) => h.signal),
     });
   })
@@ -396,8 +420,11 @@ app.get("/worldview", (c) =>
 );
 
 // GET /api/cost -> exploration_jobs spend rolled up for today + this month.
+// Cached 30s: HealthBar polls every 8s and this is a full-table aggregate.
+let _costCache: { body: object; t: number } | null = null;
 app.get("/cost", (c) =>
   guard(c, async () => {
+    if (_costCache && Date.now() - _costCache.t < 30_000) return c.json(_costCache.body);
     const res = await pool.query(
       `SELECT
          COALESCE(SUM(cost_usd) FILTER (WHERE finished_at >= date_trunc('day', now())), 0)   AS today,
@@ -407,12 +434,14 @@ app.get("/cost", (c) =>
        FROM exploration_jobs`
     );
     const row = res.rows[0] ?? {};
-    return c.json({
+    const body = {
       today: Number(row.today ?? 0),
       month: Number(row.month ?? 0),
       allTime: Number(row.all_time ?? 0),
       jobs: Number(row.jobs ?? 0),
-    });
+    };
+    _costCache = { body, t: Date.now() };
+    return c.json(body);
   })
 );
 
@@ -435,7 +464,7 @@ app.post("/genesis", (c) =>
 // GET /api/alerts?limit= -> recent alerts (newest first) + unseen count.
 app.get("/alerts", (c) =>
   guard(c, async () => {
-    const limit = Math.min(100, Number(c.req.query("limit")) || 40);
+    const limit = clampInt(c.req.query("limit"), 1, 100, 40);
     const rows = await db.select().from(alerts).orderBy(desc(alerts.createdAt)).limit(limit);
     const [u] = await db.select({ n: sql<number>`count(*)::int` }).from(alerts).where(isNull(alerts.seenAt));
     return c.json({ alerts: rows, unseen: Number(u?.n ?? 0) });
@@ -469,6 +498,24 @@ app.put("/hours", (c) =>
   })
 );
 
+// --- LOOM (narrative intelligence, Phase 0) ----------------------------------
+// GET /api/loom/status -> Phase 0 acceptance metrics (first_seen coverage,
+// dedup rate, 24h volumes) + GDELT configuration state.
+app.get("/loom/status", (c) =>
+  guard(c, async () => {
+    const status = await loomStatus();
+    // Config state from env only — never invoke the puller from a read-only
+    // endpoint (once BigQuery is wired, each pull is billable).
+    const gdelt =
+      process.env.GDELT_BQ_ENABLED === "1" && process.env.GOOGLE_APPLICATION_CREDENTIALS
+        ? "enabled"
+        : "not configured (GDELT_BQ_ENABLED / GOOGLE_APPLICATION_CREDENTIALS)";
+    return c.json({ ...status, gdelt });
+  })
+);
+// POST /api/loom/ingest -> manual wire+article pull (free — RSS + hashing only).
+app.post("/loom/ingest", (c) => guard(c, async () => c.json(await ingestLoom())));
+
 // --- Market correlation -----------------------------------------------------
 // GET /api/market -> catalog quotes + per-theory instrument links & verdicts.
 app.get("/market", (c) => guard(c, async () => c.json(await getMarketOverview())));
@@ -478,7 +525,7 @@ app.post("/market/map", (c) =>
     const body = await c.req.json().catch(() => ({}));
     const nodeId = typeof body?.nodeId === "string" ? body.nodeId : "";
     if (nodeId) return c.json(await mapTheory(nodeId));
-    return c.json(await mapUnmappedTheories(Number(body?.limit) || 20));
+    return c.json(await mapUnmappedTheories(clampInt(body?.limit, 1, 40, 20)));
   })
 );
 // POST /api/market/refresh -> pull quotes, turn significant moves into evidence.

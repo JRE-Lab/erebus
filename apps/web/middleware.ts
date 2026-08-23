@@ -1,7 +1,10 @@
 // ============================================================================
-// Basic-auth gate for the whole app. No-op when EREBUS_PASS is unset (local
-// dev / open deploy). Static assets and favicon are always skipped so the
-// browser can paint the login challenge cleanly.
+// Basic-auth gate for the whole app. Deep-review hardening:
+//  - FAIL CLOSED: a missing EREBUS_PASS returns 503 instead of silently
+//    disabling auth on a public deploy (set EREBUS_ALLOW_NO_AUTH=1 for local dev).
+//  - Constant-time credential comparison (no timing side channel).
+//  - Cross-site write requests are rejected (CSRF: browsers replay cached
+//    Basic credentials on cross-site form POSTs, and every POST here can spend).
 // ============================================================================
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -18,10 +21,23 @@ function unauthorized(): NextResponse {
   });
 }
 
+// Constant-time string comparison (edge-safe; no node:crypto dependency).
+function safeEqual(a: string, b: string): boolean {
+  const len = Math.max(a.length, b.length);
+  let diff = a.length === b.length ? 0 : 1;
+  for (let i = 0; i < len; i++) {
+    diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  }
+  return diff === 0;
+}
+
 export function middleware(req: NextRequest): NextResponse {
   const pass = process.env.EREBUS_PASS;
-  // Auth disabled unless a password is configured.
-  if (!pass) return NextResponse.next();
+  if (!pass) {
+    // Fail closed — an unset password must never mean an open dashboard.
+    if (process.env.EREBUS_ALLOW_NO_AUTH === "1") return NextResponse.next();
+    return new NextResponse("Server misconfigured: EREBUS_PASS is not set.", { status: 503 });
+  }
 
   const { pathname } = req.nextUrl;
   if (
@@ -32,6 +48,16 @@ export function middleware(req: NextRequest): NextResponse {
     return NextResponse.next();
   }
 
+  // CSRF: reject cross-site non-GET requests outright. Same-origin fetches and
+  // direct tools (curl sends no Sec-Fetch-Site) are unaffected.
+  const method = req.method.toUpperCase();
+  if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
+    const site = req.headers.get("sec-fetch-site");
+    if (site === "cross-site") {
+      return new NextResponse("Cross-site requests are not allowed.", { status: 403 });
+    }
+  }
+
   const user = process.env.EREBUS_USER || "erebus";
   const header = req.headers.get("authorization") || "";
   if (header.startsWith("Basic ")) {
@@ -39,7 +65,10 @@ export function middleware(req: NextRequest): NextResponse {
     const idx = decoded.indexOf(":");
     const u = idx >= 0 ? decoded.slice(0, idx) : decoded;
     const p = idx >= 0 ? decoded.slice(idx + 1) : "";
-    if (u === user && p === pass) return NextResponse.next();
+    // Bitwise & (not &&) so both comparisons always run — constant time.
+    if ((safeEqual(u, user) ? 1 : 0) & (safeEqual(p, pass) ? 1 : 0)) {
+      return NextResponse.next();
+    }
   }
 
   return unauthorized();

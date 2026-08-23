@@ -55,7 +55,7 @@ async function judgePair(
 ): Promise<MatchRecord | null> {
   if (await alreadyMatched(signal.id, node.id)) return null;
 
-  const { data } = await callJSON<MatchVerdict>(
+  const { data, offline, parsed } = await callJSON<MatchVerdict>(
     matchPrompt(
       { title: signal.title ?? "", summary: signal.summary ?? "" },
       { question: node.question, outcome: node.outcome, indicators: node.indicators, falsifiers: node.falsifiers }
@@ -64,19 +64,34 @@ async function judgePair(
     { tier: "sonnet", agent: "match", targetNode: node.id, maxTokens: 500 }
   );
 
+  // CRITICAL (deep-review #2): a fallback verdict must NEVER be persisted —
+  // storing it consumed the (signal,node) dedup slot forever, so every pause or
+  // provider outage permanently destroyed the evidence of that window. Skip and
+  // let a later sweep re-judge the pair for real.
+  if (offline || !parsed) return null;
+
   const effect = normEffect(data.effect);
   const weight = clamp01(data.weight);
   const rationale = typeof data.rationale === "string" ? data.rationale : "";
 
+  // Unique(signal,node) + onConflictDoNothing: a concurrent sweep judging the
+  // same pair loses cleanly instead of double-applying Bayesian evidence.
   const [matchRow] = await db
     .insert(signalMatches)
     .values({ signalId: signal.id, nodeId: node.id, effect, weight, rationale })
+    .onConflictDoNothing()
     .returning({ id: signalMatches.id });
+  if (!matchRow) return null; // lost the race — evidence already applied once
 
   if ((effect === "confirm" || effect === "refute") && weight > 0) {
-    await applyMatch(node.id, effect, weight, matchRow?.id);
+    await applyMatch(node.id, effect, weight, matchRow.id);
   }
   return { signalId: signal.id, nodeId: node.id, effect, weight, rationale };
+}
+
+// Nodes reality has finished with must not receive (or pay for) new judgments.
+function isDeadNode(n: { resolved: boolean | null; state: string; mergedInto: string | null }): boolean {
+  return Boolean(n.resolved) || n.mergedInto !== null || n.state === "dormant" || n.state === "merged";
 }
 
 // A signal vs its nearest forecast nodes.
@@ -87,7 +102,7 @@ export async function matchSignal(signalId: string): Promise<MatchRecord[]> {
   const made: MatchRecord[] = [];
   for (const cand of candidates) {
     const [node] = await db.select().from(nodes).where(eq(nodes.id, cand.id)).limit(1);
-    if (!node) continue;
+    if (!node || isDeadNode(node)) continue; // no judge spend on finished nodes
     const rec = await judgePair(signal, node);
     if (rec) made.push(rec);
   }
@@ -98,7 +113,7 @@ export async function matchSignal(signalId: string): Promise<MatchRecord[]> {
 // against reality that already arrived. Call after create/expand/pursue/roam.
 export async function matchNode(nodeId: string): Promise<MatchRecord[]> {
   const [node] = await db.select().from(nodes).where(eq(nodes.id, nodeId)).limit(1);
-  if (!node || !node.embedding) return [];
+  if (!node || !node.embedding || isDeadNode(node)) return [];
   const candidates = await nearest("signals", node.embedding, CANDIDATES);
   const made: MatchRecord[] = [];
   for (const cand of candidates) {

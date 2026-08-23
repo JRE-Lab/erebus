@@ -78,10 +78,10 @@ export async function generateRootTheories(
         eventAfter: { genesis: true, dark }, // single creation event (alerts key off after.genesis)
       });
       totalCost += r.cost;
-      if (r.offline) {
-        // The LLM fell back mid-batch (pause / provider outage): createForecast
-        // already inserted an "[offline] forecast pending" stub — remove it so
-        // junk roots never appear in the Explorer as autonomous theories.
+      // Stub detection must cover BOTH failure shapes: offline fallback AND a
+      // JSON parse failure inside createForecast (offline=false but the node
+      // carries the "[offline] forecast pending" fallback outcome).
+      if (r.offline || r.node.outcome.startsWith("[offline]")) {
         try {
           await db.delete(nodes).where(eq(nodes.id, r.node.id));
         } catch {

@@ -13,6 +13,7 @@ import {
   jsonb,
   vector,
   index,
+  uniqueIndex,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
@@ -49,7 +50,10 @@ export const nodes = pgTable(
     origin: text("origin").notNull().default("user"), // user | erebus (autonomous)
     domains: text("domains").array().notNull().default([]),
     embedding: vector("embedding", { dimensions: EMB_DIM }),
-    lastValidatedAt: timestamp("last_validated_at", { withTimezone: true }),
+    lastValidatedAt: timestamp("last_validated_at", { withTimezone: true }), // gardener decay clock — do NOT reuse
+    lastVerifiedAt: timestamp("last_verified_at", { withTimezone: true }), // resolution-verify backoff (verify.ts)
+    lastExpandedAt: timestamp("last_expanded_at", { withTimezone: true }), // selector rotation key
+    expandBlocked: boolean("expand_blocked").notNull().default(false), // max-depth/max-children — never re-pick
     mergedInto: text("merged_into").references((): AnyPgColumn => nodes.id),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -61,17 +65,21 @@ export const nodes = pgTable(
 );
 
 // --- signals: ingested reality ----------------------------------------------
-export const signals = pgTable("signals", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  source: text("source"),
-  url: text("url"),
-  title: text("title"),
-  summary: text("summary"),
-  dedupHash: text("dedup_hash").unique(),
-  publishedAt: timestamp("published_at", { withTimezone: true }),
-  ingestedAt: timestamp("ingested_at", { withTimezone: true }).notNull().defaultNow(),
-  embedding: vector("embedding", { dimensions: EMB_DIM }),
-});
+export const signals = pgTable(
+  "signals",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    source: text("source"),
+    url: text("url"),
+    title: text("title"),
+    summary: text("summary"),
+    dedupHash: text("dedup_hash").unique(),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    ingestedAt: timestamp("ingested_at", { withTimezone: true }).notNull().defaultNow(),
+    embedding: vector("embedding", { dimensions: EMB_DIM }),
+  },
+  (t) => ({ ingestedIdx: index("signals_ingested_idx").on(t.ingestedAt) })
+);
 
 // --- signal_matches: the greening linkage -----------------------------------
 export const signalMatches = pgTable(
@@ -85,7 +93,12 @@ export const signalMatches = pgTable(
     rationale: text("rationale"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => ({ nodeIdx: index("matches_node_idx").on(t.nodeId) })
+  (t) => ({
+    nodeIdx: index("matches_node_idx").on(t.nodeId),
+    // One judgment per (signal, node) — enforced in the DB so concurrent sweeps
+    // can never double-apply Bayesian evidence.
+    pairUq: uniqueIndex("signal_matches_pair_uq").on(t.signalId, t.nodeId),
+  })
 );
 
 // --- relationships ----------------------------------------------------------
@@ -143,22 +156,32 @@ export const events = pgTable(
     promptVersion: text("prompt_version"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => ({ nodeIdx: index("events_node_idx").on(t.nodeId) })
+  (t) => ({
+    nodeIdx: index("events_node_idx").on(t.nodeId),
+    createdIdx: index("events_created_idx").on(t.createdAt), // alerts-tick cursor scans
+  })
 );
 
 // --- exploration_jobs -------------------------------------------------------
-export const explorationJobs = pgTable("exploration_jobs", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  type: text("type"), // expand|challenge|connect|synthesize|shadow|ingest|match
-  targetNode: text("target_node").references(() => nodes.id, { onDelete: "set null" }),
-  status: text("status").notNull().default("queued"),
-  result: jsonb("result"),
-  inputTokens: integer("input_tokens"),
-  outputTokens: integer("output_tokens"),
-  costUsd: real("cost_usd"),
-  startedAt: timestamp("started_at", { withTimezone: true }),
-  finishedAt: timestamp("finished_at", { withTimezone: true }),
-});
+export const explorationJobs = pgTable(
+  "exploration_jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    type: text("type"), // expand|challenge|connect|synthesize|shadow|ingest|match
+    targetNode: text("target_node").references(() => nodes.id, { onDelete: "set null" }),
+    status: text("status").notNull().default("queued"),
+    result: jsonb("result"),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    costUsd: real("cost_usd"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => ({
+    finishedIdx: index("jobs_finished_idx").on(t.finishedAt), // sargable budget scans
+    targetIdx: index("jobs_target_idx").on(t.targetNode), // FK delete support
+  })
+);
 
 // --- gardener_actions -------------------------------------------------------
 export const gardenerActions = pgTable("gardener_actions", {
@@ -257,7 +280,67 @@ export const alerts = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     seenAt: timestamp("seen_at", { withTimezone: true }),
   },
-  (t) => ({ createdIdx: index("alerts_created_idx").on(t.createdAt) })
+  (t) => ({
+    createdIdx: index("alerts_created_idx").on(t.createdAt),
+    seenIdx: index("alerts_seen_idx").on(t.seenAt), // unseen-count bell poll
+  })
+);
+
+// ============================================================================
+// LOOM — narrative intelligence layer (Phase 0: ingestion + dual timestamps).
+// R1: every article stores published_at (claimed by the feed) AND first_seen_at
+// (observed by our poller). All downstream event studies key on first_seen_at.
+// Embeddings deliberately share EREBUS's 1536-dim space (one model, one space).
+// ============================================================================
+export const loomOutlets = pgTable("loom_outlets", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  domain: text("domain").notNull().unique(),
+  country: text("country"),
+  lang: text("lang"),
+  isWire: boolean("is_wire").notNull().default(false),
+});
+
+export const loomArticles = pgTable(
+  "loom_articles",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    urlCanon: text("url_canon").notNull().unique(),
+    outletId: uuid("outlet_id").references(() => loomOutlets.id),
+    title: text("title"),
+    lede: text("lede"),
+    textHash: text("text_hash"),
+    lang: text("lang"),
+    publishedAt: timestamp("published_at", { withTimezone: true }), // claimed (R1)
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(), // observed (R1)
+    gdeltRef: text("gdelt_ref"),
+    embedding: vector("embedding", { dimensions: EMB_DIM }), // populated in Phase 1
+    narrativeId: uuid("narrative_id"), // FK lands with the narratives table (Phase 1)
+  },
+  (t) => ({
+    firstSeenIdx: index("loom_articles_first_seen_idx").on(t.firstSeenAt),
+    narrativeIdx: index("loom_articles_narrative_idx").on(t.narrativeId),
+    hashIdx: index("loom_articles_hash_idx").on(t.textHash),
+  })
+);
+
+export const loomWireReleases = pgTable(
+  "loom_wire_releases",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    wireName: text("wire_name").notNull(),
+    url: text("url").notNull().unique(),
+    title: text("title"),
+    lede: text("lede"),
+    textHash: text("text_hash"),
+    publishedAt: timestamp("published_at", { withTimezone: true }), // claimed (R1)
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(), // observed (R1)
+    embedding: vector("embedding", { dimensions: EMB_DIM }),
+  },
+  (t) => ({
+    firstSeenIdx: index("loom_wires_first_seen_idx").on(t.firstSeenAt),
+    hashIdx: index("loom_wires_hash_idx").on(t.textHash), // provenance fingerprint lookups (M2)
+  })
 );
 
 // --- settings: key/value app config (autonomous toggle, etc.) ---------------
@@ -282,5 +365,8 @@ export const schema = {
   nodeInstruments,
   gameReads,
   alerts,
+  loomOutlets,
+  loomArticles,
+  loomWireReleases,
   settings,
 };

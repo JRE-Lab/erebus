@@ -1,4 +1,4 @@
-export { call, callJSON, llmLive, OPUS, SONNET } from "./client.js";
+export { call, callJSON, recordSpend, llmLive, OPUS, SONNET } from "./client.js";
 export type { CallOpts, LLMResult } from "./client.js";
 export * from "./prompts.js";
 export { LENSES } from "./lenses.js";

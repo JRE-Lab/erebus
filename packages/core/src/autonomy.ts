@@ -4,9 +4,14 @@ import { pool } from "@erebus/db";
 import { expandForward } from "./tree.js";
 import { resolveDueNodes } from "./scoring.js";
 
-// Pick the most promising node to branch from: green launch points first, then
-// the most FRAGILE equilibria (low stability = where a small move flips the
-// outcome — the real alpha), then breadth (fewest children), oldest first.
+// Pick the most promising node to branch from. Deep-review fix: the old order
+// (launch DESC, stability ASC, ...) was STICKY — expanding a node changed none
+// of its ranking keys, so one fragile launch point absorbed the whole roam
+// budget and, once depth-capped, deadlocked roaming forever. Now:
+//  - expand_blocked (max-depth / max-children) and resolved nodes are excluded,
+//  - child count ranks FIRST so expansion itself rotates selection,
+//  - last_expanded_at breaks ties toward least-recently-touched,
+//  - fragility (low stability) still matters, but can no longer pin selection.
 export async function selectNext(): Promise<string | null> {
   const res = await pool.query(
     `SELECT n.id
@@ -14,7 +19,10 @@ export async function selectNext(): Promise<string | null> {
        LEFT JOIN (SELECT parent_id, count(*) AS c FROM nodes GROUP BY parent_id) ch ON ch.parent_id = n.id
       WHERE n.state IN ('speculative','corroborating','corroborated','tipping')
         AND n.merged_into IS NULL
-      ORDER BY n.is_launch_point DESC, n.stability ASC, COALESCE(ch.c, 0) ASC, n.created_at ASC
+        AND n.resolved IS NULL
+        AND n.expand_blocked IS NOT TRUE
+      ORDER BY n.is_launch_point DESC, COALESCE(ch.c, 0) ASC,
+               n.last_expanded_at ASC NULLS FIRST, n.stability ASC, n.created_at ASC
       LIMIT 1`
   );
   return res.rows[0]?.id ?? null;

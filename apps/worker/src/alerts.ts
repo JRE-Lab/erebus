@@ -128,8 +128,12 @@ export async function runAlerts(): Promise<{ scanned: number; alerts: number }> 
   }
 
   // Cursor: the last PROCESSED event's DB timestamp — backlog-safe, skew-safe.
+  // +1ms because toISOString() truncates Postgres microseconds: without it the
+  // strict `>` re-reads the tail event every tick (duplicate Telegram pushes
+  // once the 24h dedup lapses). Events sharing the same millisecond arrive in
+  // the same 500-row page in practice, so the skip risk is negligible.
   const last = rows[rows.length - 1]!;
-  await setSetting("alerts_watermark", { t: last.createdAt.toISOString() });
+  await setSetting("alerts_watermark", { t: new Date(last.createdAt.getTime() + 1).toISOString() });
 
   // Housekeeping: prune old seen alerts so the unseen count stays cheap.
   try {

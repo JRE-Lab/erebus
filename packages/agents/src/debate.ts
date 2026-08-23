@@ -20,6 +20,7 @@ export async function runDebate(nodeId: string, rounds = 1): Promise<DebateResul
   if (!node) return null;
 
   let cost = 0;
+  let roundsPersisted = 0;
   let verdict = "hold";
   let revisedOutcome: string | undefined;
   let indicators = node.indicators ?? [];
@@ -35,6 +36,9 @@ export async function runDebate(nodeId: string, rounds = 1): Promise<DebateResul
       maxTokens: 1200,
     });
     cost += pro.cost;
+    // Paused/offline/over-budget: don't persist empty debate rounds or mutate
+    // the node's outcome/confidence off fallback content.
+    if (pro.offline || !pro.content) break;
 
     const con = await call(adversaryPrompt({ question: node.question, outcome: revisedOutcome ?? node.outcome }, pro.content), {
       tier: "opus",
@@ -57,6 +61,9 @@ export async function runDebate(nodeId: string, rounds = 1): Promise<DebateResul
       { tier: "opus", agent: "debate:synthesis", targetNode: nodeId, maxTokens: 1500 }
     );
     cost += synth.cost;
+    // A round is only real if all three legs completed with parseable output —
+    // never persist empty adversary/synthesis rows off fallbacks.
+    if (con.offline || !con.content || synth.offline || !synth.parsed) break;
 
     verdict = synth.data.verdict || verdict;
     revisedOutcome = synth.data.revised_outcome || revisedOutcome;
@@ -75,6 +82,13 @@ export async function runDebate(nodeId: string, rounds = 1): Promise<DebateResul
       model: OPUS,
       promptVersion: PROMPT_VERSION,
     });
+    roundsPersisted++;
+  }
+
+  // No completed rounds (paused/over-budget/outage): nothing to apply — avoid
+  // the no-op node touch + before==after provenance event per attempt.
+  if (roundsPersisted === 0) {
+    return { rounds: 0, verdict, confidenceBefore: before, confidenceAfter: before, revisedOutcome: undefined, cost };
   }
 
   await db

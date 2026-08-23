@@ -30,11 +30,14 @@ export async function mapTheory(nodeId: string): Promise<{ created: number; cost
   const [node] = await db.select().from(nodes).where(eq(nodes.id, nodeId)).limit(1);
   if (!node) return { created: 0, cost: 0 };
 
-  const { data, cost } = await callJSON<MapShape>(
+  const { data, cost, offline, parsed } = await callJSON<MapShape>(
     prompt({ question: node.question, outcome: node.outcome, domains: node.domains ?? [] }),
     { instruments: [] },
     { tier: "sonnet", agent: "market-map", targetNode: nodeId, maxTokens: 600 }
   );
+  // A fallback must not be destructive: the old code deleted the node's real
+  // instrument links and re-inserted the empty fallback set on every outage.
+  if (offline || !parsed) return { created: 0, cost };
 
   // Idempotent remap: clear this node's links, re-insert the chosen set.
   await db.delete(nodeInstruments).where(eq(nodeInstruments.nodeId, nodeId));

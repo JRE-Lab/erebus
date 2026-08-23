@@ -22,6 +22,7 @@
     "@erebus/evals": "workspace:*",
     "@erebus/gardener": "workspace:*",
     "@erebus/ingest": "workspace:*",
+    "@erebus/loom": "workspace:*",
     "@erebus/market": "workspace:*",
     "@erebus/shadowboard": "workspace:*",
     "drizzle-orm": "^0.38.3",

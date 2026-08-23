@@ -1,7 +1,7 @@
 // Content Studio step 3: narration -> ElevenLabs TTS mp3 (a distinct EREBUS
 // voice). Pause-guarded + offline-safe: no key / paused -> no audio, no throw.
 import { eq } from "drizzle-orm";
-import { db, contentItems, isPaused } from "@erebus/db";
+import { db, contentItems, isPaused, withinDailyBudget } from "@erebus/db";
 import { saveFile } from "./storage.js";
 
 const TTS_BASE = "https://api.elevenlabs.io/v1/text-to-speech";
@@ -33,6 +33,7 @@ export async function ttsBytes(text: string): Promise<Buffer | null> {
 // Synthesize a content item's narration, persist mp3, update audioUrl + status.
 export async function synthesizeVoice(contentId: string): Promise<{ audioUrl: string | null }> {
   if (await isPaused()) return { audioUrl: null };
+  if (!(await withinDailyBudget())) return { audioUrl: null }; // paid path — governed
   const [item] = await db.select().from(contentItems).where(eq(contentItems.id, contentId)).limit(1);
   if (!item?.script) return { audioUrl: null };
 

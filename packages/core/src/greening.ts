@@ -32,9 +32,17 @@ export function stateFromConfirmation(
   confirmation: number,
   resolved?: boolean | null,
   brier?: number | null,
-  stability?: number | null
+  stability?: number | null,
+  resolvedOutcome?: boolean | null
 ): NodeState {
-  if (resolved) return (brier ?? 1) < 0.25 ? "resolved_true" : "resolved_false";
+  // Resolved state comes from the ACTUAL outcome, never from the Brier score
+  // (a correctly-resolved-true node at p=0.4 has brier=0.36 — the old proxy
+  // rendered it resolved_false). Brier remains only as a legacy fallback for
+  // rows adjudicated before resolvedOutcome existed.
+  if (resolved) {
+    const happened = resolvedOutcome ?? (brier ?? 1) < 0.25;
+    return happened ? "resolved_true" : "resolved_false";
+  }
   if (confirmation <= THRESH.contradicted) return "contradicted";
   const fragile = typeof stability === "number" && stability < FRAGILE_BELOW;
   // A forecast that's confirming but on a knife-edge equilibrium is "tipping".
@@ -49,6 +57,14 @@ export function stateFromConfirmation(
 // confirmation scalar [-1,1] is a pure view of that probability (2p-1), so the
 // state machine + UI keep working. Sigmoid gives natural diminishing returns
 // near certainty (no more raw volume saturation).
+// A node reality has finished with (resolved) or the gardener has retired
+// (dormant/merged) must never receive further evidence updates — resolved
+// probabilities are the calibration ledger, and merged/dormant nodes would
+// otherwise "resurrect" into live states.
+function isTerminal(node: { resolved: boolean | null; state: string; mergedInto: string | null }): boolean {
+  return Boolean(node.resolved) || node.mergedInto !== null || node.state === "dormant" || node.state === "merged";
+}
+
 export async function applyMatch(
   nodeId: string,
   effect: MatchEffect,
@@ -57,6 +73,9 @@ export async function applyMatch(
 ): Promise<{ confirmation: number; state: NodeState; probability: number } | null> {
   const [node] = await db.select().from(nodes).where(eq(nodes.id, nodeId)).limit(1);
   if (!node) return null;
+  if (isTerminal(node)) {
+    return { confirmation: node.confirmation, state: node.state as NodeState, probability: node.probability ?? pFromConf(node.confirmation) };
+  }
 
   const p0 = node.probability ?? pFromConf(node.confirmation);
   const w = Math.max(0, Math.min(1, weight));
@@ -126,6 +145,9 @@ export async function setProbability(
 ): Promise<{ confirmation: number; state: NodeState; probability: number } | null> {
   const [node] = await db.select().from(nodes).where(eq(nodes.id, nodeId)).limit(1);
   if (!node) return null;
+  if (isTerminal(node)) {
+    return { confirmation: node.confirmation, state: node.state as NodeState, probability: node.probability ?? pFromConf(node.confirmation) };
+  }
   const p = clampP(probability);
   const confirmation = confFromP(p);
   const state = stateFromConfirmation(confirmation, node.resolved, node.brier, node.stability);
@@ -155,6 +177,7 @@ export async function applyStability(
 ): Promise<{ state: NodeState; stability: number } | null> {
   const [node] = await db.select().from(nodes).where(eq(nodes.id, nodeId)).limit(1);
   if (!node) return null;
+  if (isTerminal(node)) return { state: node.state as NodeState, stability: node.stability };
   const s = Math.max(0, Math.min(1, stability));
   const state = stateFromConfirmation(node.confirmation, node.resolved, node.brier, s);
   await db

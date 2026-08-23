@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { NodeRow, NodeState } from "@erebus/core/client";
 import { STATE_COLORS } from "@erebus/core/client";
 import {
@@ -67,15 +67,30 @@ interface EventRow {
   after?: unknown;
   createdAt?: string | null;
 }
+// Row shape of the API's signal_matches join (match metadata + nested signal).
+interface SignalMatchRow {
+  id?: string;
+  effect?: string | null;
+  weight?: number | null;
+  rationale?: string | null;
+  createdAt?: string | null;
+  signal?: {
+    title?: string | null;
+    source?: string | null;
+    summary?: string | null;
+    url?: string | null;
+  } | null;
+}
+
 interface NodeDetailData {
   node?: NodeRow;
-  signals?: MatchedSignal[];
-  matches?: MatchedSignal[];
+  // Deep-review fix: the API returns `signal_matches` and `shadow_reads` —
+  // the old `signals`/`shadowRead` keys never existed, so matched evidence and
+  // shadow reads were permanently invisible in the panel.
+  signal_matches?: SignalMatchRow[];
   debates?: DebateRow[];
-  shadowRead?: ShadowRead | null;
-  shadowReads?: ShadowRead[];
+  shadow_reads?: ShadowRead[];
   events?: EventRow[];
-  provenance?: EventRow[];
   game_read?: GameReadRow | null;
   relationships?: { from?: RelationshipRow[]; to?: RelationshipRow[] };
 }
@@ -145,14 +160,21 @@ export function NodeDetail({ nodeId, selectedIds, onRefresh, onClearSelection, o
     }
   };
 
+  // Stale-response guard: rapid node switches must not render the previous
+  // node's slow response over the current selection (deep-review UI finding).
+  const activeNodeRef = useRef<string | null>(null);
+  activeNodeRef.current = nodeId;
+
   const load = async () => {
     if (!nodeId) {
       setData(null);
       return;
     }
+    const requested = nodeId;
     setLoading(true);
     try {
-      const d = (await fetchNode(nodeId)) as unknown;
+      const d = (await fetchNode(requested)) as unknown;
+      if (activeNodeRef.current !== requested) return; // user moved on — drop it
       // fetchNode may return the bare node or an enriched wrapper.
       const wrapped =
         d && typeof d === "object" && "node" in (d as object)
@@ -160,9 +182,9 @@ export function NodeDetail({ nodeId, selectedIds, onRefresh, onClearSelection, o
           : { node: d as NodeRow };
       setData(wrapped);
     } catch {
-      setData(null);
+      if (activeNodeRef.current === requested) setData(null);
     } finally {
-      setLoading(false);
+      if (activeNodeRef.current === requested) setLoading(false);
     }
   };
 
@@ -209,10 +231,21 @@ export function NodeDetail({ nodeId, selectedIds, onRefresh, onClearSelection, o
   }
 
   const node = data?.node;
-  const signals = data?.signals ?? data?.matches ?? [];
+  // Flatten signal_matches into the display shape (signal fields + judgment).
+  const signals: MatchedSignal[] = (data?.signal_matches ?? []).map((m) => ({
+    id: m.id,
+    title: m.signal?.title ?? null,
+    source: m.signal?.source ?? null,
+    summary: m.signal?.summary ?? null,
+    url: m.signal?.url ?? null,
+    effect: m.effect ?? null,
+    weight: m.weight ?? null,
+    rationale: m.rationale ?? null,
+    createdAt: m.createdAt ?? null,
+  }));
   const debates = data?.debates ?? [];
-  const shadow = data?.shadowRead ?? data?.shadowReads?.[0] ?? null;
-  const events = data?.events ?? data?.provenance ?? [];
+  const shadow = data?.shadow_reads?.[0] ?? null;
+  const events = data?.events ?? [];
   const game = data?.game_read ?? null;
   const rels: Array<RelationshipRow & { dir: "out" | "in" }> = [
     ...(data?.relationships?.from ?? []).map((r) => ({ ...r, dir: "out" as const })),

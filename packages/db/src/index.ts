@@ -7,3 +7,4 @@ export type { Neighbor } from "./vector.js";
 export { recordEvent } from "./provenance.js";
 export type { EventInput } from "./provenance.js";
 export { getSetting, setSetting, isPaused, setPaused } from "./settings.js";
+export { spentToday, withinDailyBudget, DAILY_BUDGET_USD } from "./budget.js";

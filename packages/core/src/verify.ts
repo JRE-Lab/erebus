@@ -6,7 +6,7 @@
 // operator. Also AUDITS recently-resolved theories: a confident verdict that
 // contradicts a stored resolution raises a "resolution_disputed" event (never
 // overwrites — adjudicate is idempotent by design).
-import { and, asc, desc, eq, isNull, lte } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, lte, or } from "drizzle-orm";
 import { db, nodes, signals, signalMatches, nearest, recordEvent } from "@erebus/db";
 import { callJSON, resolutionVerifyPrompt } from "@erebus/agents";
 import { adjudicate } from "./scoring.js";
@@ -101,16 +101,30 @@ export async function verifyResolutions(
   const limit = Math.max(1, Math.min(40, opts.limit ?? 20));
   const res: VerifyResult = { due: 0, checked: 0, resolved: 0, unclear: 0, audited: 0, disputed: 0, cost: 0 };
 
-  // 1) Due, unresolved -> judge -> confidently adjudicate.
+  // 1) Due, unresolved -> judge -> confidently adjudicate. The lastValidatedAt
+  // backoff (3 days) stops a block of chronically-unclear oldest-horizon nodes
+  // from occupying every slot and re-billing the same judgments forever
+  // (deep-review starvation finding).
+  const backoff = new Date(Date.now() - 3 * 86_400_000);
   const due = await db
     .select()
     .from(nodes)
-    .where(and(isNull(nodes.resolved), lte(nodes.horizon, new Date())))
+    .where(
+      and(
+        isNull(nodes.resolved),
+        lte(nodes.horizon, new Date()),
+        or(isNull(nodes.lastVerifiedAt), lte(nodes.lastVerifiedAt, backoff))
+      )
+    )
     .orderBy(asc(nodes.horizon))
     .limit(limit);
   res.due = due.length;
 
   for (const node of due) {
+    // Stamp the attempt up front so unclear/no-evidence nodes also back off.
+    try {
+      await db.update(nodes).set({ lastVerifiedAt: new Date() }).where(eq(nodes.id, node.id));
+    } catch { /* best-effort */ }
     const ev = await evidenceFor(node);
     if (!ev.length) {
       res.unclear++;
@@ -124,7 +138,14 @@ export async function verifyResolutions(
     }
     res.checked++;
     const conf = clamp01(verdict.confidence);
-    if (verdict.verdict === "unclear" || conf < CONF_THRESHOLD) {
+    // STRICT verdict whitelist: only the two exact terminal strings act. The
+    // old `verdict === "happened"` coercion turned any stray wording
+    // ("occurred", "yes") into an auto-adjudicated DID NOT HAPPEN.
+    if (verdict.verdict !== "happened" && verdict.verdict !== "did_not_happen") {
+      res.unclear++;
+      continue;
+    }
+    if (conf < CONF_THRESHOLD) {
       res.unclear++;
       continue;
     }
@@ -144,14 +165,21 @@ export async function verifyResolutions(
   }
 
   // 2) Audit recently-resolved theories: flag (never overwrite) contradictions.
+  // Same lastValidatedAt backoff — the old query re-audited (and re-billed) the
+  // same 10 nodes and re-raised the same dispute every 12 hours forever.
   if (opts.auditResolved !== false) {
     const done = await db
       .select()
       .from(nodes)
-      .where(eq(nodes.resolved, true))
+      .where(
+        and(eq(nodes.resolved, true), or(isNull(nodes.lastVerifiedAt), lte(nodes.lastVerifiedAt, backoff)))
+      )
       .orderBy(desc(nodes.updatedAt))
       .limit(10);
     for (const node of done) {
+      try {
+        await db.update(nodes).set({ lastVerifiedAt: new Date() }).where(eq(nodes.id, node.id));
+      } catch { /* best-effort */ }
       const ev = await evidenceFor(node);
       if (!ev.length) continue;
       const { verdict, cost, offline } = await judge(node, ev);
@@ -159,7 +187,8 @@ export async function verifyResolutions(
       if (offline) continue;
       res.audited++;
       const conf = clamp01(verdict.confidence);
-      if (verdict.verdict === "unclear" || conf < CONF_THRESHOLD) continue;
+      if (verdict.verdict !== "happened" && verdict.verdict !== "did_not_happen") continue; // strict whitelist
+      if (conf < CONF_THRESHOLD) continue;
       const happened = verdict.verdict === "happened";
       if (happened !== Boolean(node.resolvedOutcome)) {
         res.disputed++;

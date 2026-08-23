@@ -7,7 +7,7 @@
 // Every call logs spend to exploration_jobs. Offline only if NO provider key.
 // ============================================================================
 import Anthropic from "@anthropic-ai/sdk";
-import { db, explorationJobs, isPaused } from "@erebus/db";
+import { db, explorationJobs, isPaused, withinDailyBudget } from "@erebus/db";
 
 const PROVIDER = (process.env.LLM_PROVIDER || "auto").toLowerCase();
 const OPUS = process.env.OPUS_MODEL || "claude-opus-4-8";
@@ -95,9 +95,14 @@ async function callAnthropic(model: string, system: string | undefined, prompt: 
   // Filtering to text blocks also skips Fable's always-on thinking blocks.
   const content = res.content.filter((b) => b.type === "text").map((b) => (b as { type: "text"; text: string }).text).join("\n");
   // Whole-chain refusal (or empty decline): throw so the provider chain falls
-  // through to OpenAI instead of silently returning an empty result.
+  // through to OpenAI instead of silently returning an empty result. Attach the
+  // usage so call() can ledger any mid-stream spend that WAS billed (deep-review
+  // finding: refusal spend vanished from the ledger, then the fallback re-spent).
   if (!content && (res as { stop_reason?: string }).stop_reason === "refusal") {
-    throw new Error(`anthropic refusal (${model})`);
+    const err = new Error(`anthropic refusal (${model})`) as Error & { usage?: { input: number; output: number }; servedModel?: string };
+    err.usage = { input: res.usage.input_tokens, output: res.usage.output_tokens };
+    err.servedModel = (res as { model?: string }).model || model;
+    throw err;
   }
   const served = (res as { model?: string }).model || model;
   return { content, input: res.usage.input_tokens, output: res.usage.output_tokens, model: served };
@@ -147,6 +152,13 @@ export async function call(prompt: string, opts: CallOpts = {}): Promise<LLMResu
   if (await isPaused()) {
     return { content: "", cost: 0, model: "paused", offline: true, usage: { input: 0, output: 0 } };
   }
+  // Shared daily budget — enforced HERE so every paid path (worker ticks, web
+  // endpoints, matching, market, content scripts) hits one governor. Fail-closed
+  // semantics live in @erebus/db/budget. Over budget degrades exactly like
+  // paused: callers receive their offline fallback, no spend occurs.
+  if (!(await withinDailyBudget())) {
+    return { content: "", cost: 0, model: "budget", offline: true, usage: { input: 0, output: 0 } };
+  }
   const order = providerOrder();
   if (order.length === 0) {
     return { content: "", cost: 0, model: "none", offline: true, usage: { input: 0, output: 0 } };
@@ -164,6 +176,12 @@ export async function call(prompt: string, opts: CallOpts = {}): Promise<LLMResu
       return { content: raw.content, cost: c, model: raw.model, offline: false, usage: { input: raw.input, output: raw.output } };
     } catch (e) {
       lastErr = e;
+      // A refusal after partial output WAS billed — ledger it before moving on.
+      const errUsage = (e as { usage?: { input: number; output: number }; servedModel?: string }).usage;
+      if (errUsage && (errUsage.input > 0 || errUsage.output > 0)) {
+        const m = (e as { servedModel?: string }).servedModel || model;
+        await logSpend(opts.agent || "agent", m, errUsage.input, errUsage.output, cost(m, errUsage.input, errUsage.output), opts.targetNode);
+      }
       // In auto mode (another provider remains), ANY Anthropic failure after
       // retries — no credit, auth, rate, outage — falls through to OpenAI.
       if (i < order.length - 1) {
@@ -176,21 +194,38 @@ export async function call(prompt: string, opts: CallOpts = {}): Promise<LLMResu
   throw lastErr;
 }
 
-export async function callJSON<T>(prompt: string, fallback: T, opts: CallOpts = {}): Promise<{ data: T; cost: number; offline: boolean }> {
+// `parsed` tells callers whether `data` is REAL model output (true) or the
+// fallback (false, via offline/pause/budget/parse failure). Anything that
+// PERSISTS a result must check it — the deep review found fallback verdicts
+// being stored as real evidence, permanently poisoning the corroboration engine.
+export async function callJSON<T>(
+  prompt: string,
+  fallback: T,
+  opts: CallOpts = {}
+): Promise<{ data: T; cost: number; offline: boolean; parsed: boolean }> {
   const system = (opts.system ? opts.system + "\n\n" : "") + "Respond with ONLY valid JSON — no prose, no markdown fences.";
   let r: LLMResult;
   try {
     r = await call(prompt, { ...opts, system });
   } catch {
-    return { data: fallback, cost: 0, offline: true };
+    return { data: fallback, cost: 0, offline: true, parsed: false };
   }
-  if (r.offline || !r.content) return { data: fallback, cost: 0, offline: true };
+  if (r.offline || !r.content) {
+    // note: an empty response can still have been billed (r.cost carries it)
+    return { data: fallback, cost: r.cost ?? 0, offline: true, parsed: false };
+  }
   try {
     const cleaned = r.content.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-    return { data: JSON.parse(cleaned) as T, cost: r.cost, offline: false };
+    return { data: JSON.parse(cleaned) as T, cost: r.cost, offline: false, parsed: true };
   } catch {
-    return { data: fallback, cost: r.cost, offline: false };
+    console.warn(`[llm] JSON parse failure (${opts.agent || "agent"}): ${r.content.slice(0, 200)}`);
+    return { data: fallback, cost: r.cost, offline: false, parsed: false };
   }
+}
+
+// Ledger non-LLM paid work (image gen, TTS) so the budget governor sees it.
+export async function recordSpend(type: string, model: string, costUsd: number): Promise<void> {
+  await logSpend(type, model, 0, 0, costUsd);
 }
 
 export { OPUS, SONNET };

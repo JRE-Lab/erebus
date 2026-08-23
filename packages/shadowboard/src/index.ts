@@ -53,11 +53,15 @@ export async function runShadowRead(nodeId: string): Promise<ShadowReadResult> {
   }
 
   // Run the shadow read (Opus). Offline -> EMPTY_READ, no spawn, no crash.
-  const { data, cost, offline } = await callJSON<ShadowShape>(
+  const { data, cost, offline, parsed } = await callJSON<ShadowShape>(
     shadowReadPrompt({ question: node.question, outcome: node.outcome }),
     EMPTY_READ,
     { tier: "opus", agent: "shadow", targetNode: nodeId }
   );
+  // Never persist the EMPTY_READ fallback as a real analysis row.
+  if (offline || !parsed) {
+    return { shadowRead: null, spawnedNode: null, cost, offline };
+  }
 
   // Persist the shadow read.
   const [sr] = await db
@@ -83,6 +87,14 @@ export async function runShadowRead(nodeId: string): Promise<ShadowReadResult> {
       `Contested counter-read: ${node.question} -> ${data.counter_narrative}`
     );
     totalCost += contested.cost;
+    // Never wire a fallback stub into the tree (budget/pause/parse failure
+    // between the read and the spawn) — mirror genesis's stub cleanup.
+    if (contested.offline || contested.node.outcome.startsWith("[offline]")) {
+      try {
+        await db.delete(nodes).where(eq(nodes.id, contested.node.id));
+      } catch { /* best-effort */ }
+      return { shadowRead: sr, spawnedNode: null, cost: totalCost, offline: false };
+    }
     const newId = contested.node.id;
     spawnedNode = newId;
 
