@@ -16,6 +16,9 @@
 // Phase 4: intent (ACH + ICD 203 + R2 falsifiers), forecasts (R3 append-only),
 //   scoreboard (R6), playbook pilot (M9).
 //   - loomScoreboard(), generatePlaybooks(theoryRef)
+// Bridge: promoted narratives enter the THEORY TREE as `signals` rows
+//   (source "loom", centroid as embedding) and green theories through the
+//   existing judge + Bayesian pipeline — the spec's "feeds the theory tree".
 // Phase 5: analogs (M7, self-corpus — priors only when the precedent set is
 //   deep enough, else the hand-set prior stands and says so), source/actor
 //   behavioral priors (M4), negative space (M10 asymmetry + displacement),
@@ -42,3 +45,5 @@ export { buildAnalogs, lifecyclePrior, marketPrior, narrativeAnalogs } from "./a
 export type { LoomAnalogResult, AnalogPrior } from "./analogs.js";
 export { runSourceGraph, narrativeSourcePriors, narrativeNegativeSpace } from "./sourcegraph.js";
 export type { LoomSourceGraphResult } from "./sourcegraph.js";
+export { bridgeNarrativesToTree } from "./bridge.js";
+export type { LoomBridgeResult } from "./bridge.js";

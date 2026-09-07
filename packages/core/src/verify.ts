@@ -6,7 +6,7 @@
 // operator. Also AUDITS recently-resolved theories: a confident verdict that
 // contradicts a stored resolution raises a "resolution_disputed" event (never
 // overwrites — adjudicate is idempotent by design).
-import { and, asc, desc, eq, isNull, lte, or } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, lte, ne, or } from "drizzle-orm";
 import { db, nodes, signals, signalMatches, nearest, recordEvent } from "@erebus/db";
 import { callJSON, resolutionVerifyPrompt } from "@erebus/agents";
 import { adjudicate } from "./scoring.js";
@@ -41,7 +41,11 @@ async function evidenceFor(node: NodeRow): Promise<string[]> {
     })
     .from(signalMatches)
     .leftJoin(signals, eq(signalMatches.signalId, signals.id))
-    .where(eq(signalMatches.nodeId, node.id))
+    // LOOM bridge rows are LLM-written aggregates of articles that are usually
+    // in this list already; as "ingested source items" they would read as
+    // independent multi-item corroboration with uncheckable provenance.
+    // Resolution verification uses primary sources only.
+    .where(and(eq(signalMatches.nodeId, node.id), or(isNull(signals.source), ne(signals.source, "loom"))))
     .orderBy(desc(signalMatches.createdAt))
     .limit(12);
 

@@ -832,7 +832,10 @@ export const loomPlaybooks = pgTable("loom_playbooks", {
   outcomeDesc: text("outcome_desc").notNull(),
   pattern: jsonb("pattern").notNull().default({}), // {themes[], actors[], framingSignature, sequencing}
   confidence: real("confidence").notNull().default(0.5), // decays on non-matches
-  model: text("model"),
+  model: text("model"), // the SERVED model (ledger truth), never the configured tier
+  // Embedding of the campaign pattern (outcome + themes + framing signature),
+  // same 1536 space as narrative centroids. Filled when embeddings are live.
+  patternEmbedding: vector("pattern_embedding", { dimensions: EMB_DIM }),
   lastMatchedAt: timestamp("last_matched_at", { withTimezone: true }),
   decayedAt: timestamp("decayed_at", { withTimezone: true }), // last confidence decay applied
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

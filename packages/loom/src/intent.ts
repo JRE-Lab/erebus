@@ -89,7 +89,7 @@ export async function extractFraming(): Promise<LoomFramingResult> {
         remedy: res.data.remedy?.slice(0, 200) || null,
         urgency: ["low", "medium", "high"].includes(res.data.urgency) ? res.data.urgency : null,
         impliedAction: res.data.implied_action?.slice(0, 200) || null,
-        model: SONNET,
+        model: res.model, // served, not configured
       })
       .onConflictDoNothing();
     r.framed++;

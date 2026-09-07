@@ -51,7 +51,8 @@ async function alreadyMatched(signalId: string, nodeId: string): Promise<boolean
 // Judge one signal<->node pair and persist (dedup'd). Returns the record or null.
 async function judgePair(
   signal: { id: string; title: string | null; summary: string | null },
-  node: { id: string; question: string; outcome: string; indicators: string[]; falsifiers: string[] }
+  node: { id: string; question: string; outcome: string; indicators: string[]; falsifiers: string[] },
+  weightScale = 1
 ): Promise<MatchRecord | null> {
   if (await alreadyMatched(signal.id, node.id)) return null;
 
@@ -71,7 +72,11 @@ async function judgePair(
   if (offline || !parsed) return null;
 
   const effect = normEffect(data.effect);
-  const weight = clamp01(data.weight);
+  // weightScale < 1 is for sources whose evidence is CORRELATED with signals
+  // already applied (the LOOM narrative bridge aggregates member articles that
+  // usually greened this node individually). The stored weight is the scaled
+  // one, so the ledger shows what was actually applied.
+  const weight = clamp01(clamp01(data.weight) * weightScale);
   const rationale = typeof data.rationale === "string" ? data.rationale : "";
 
   // Unique(signal,node) + onConflictDoNothing: a concurrent sweep judging the
@@ -95,7 +100,10 @@ function isDeadNode(n: { resolved: boolean | null; state: string; mergedInto: st
 }
 
 // A signal vs its nearest forecast nodes.
-export async function matchSignal(signalId: string): Promise<MatchRecord[]> {
+export async function matchSignal(
+  signalId: string,
+  opts: { weightScale?: number } = {}
+): Promise<MatchRecord[]> {
   const [signal] = await db.select().from(signals).where(eq(signals.id, signalId)).limit(1);
   if (!signal || !signal.embedding) return [];
   const candidates = await nearest("nodes", signal.embedding, CANDIDATES);
@@ -103,7 +111,7 @@ export async function matchSignal(signalId: string): Promise<MatchRecord[]> {
   for (const cand of candidates) {
     const [node] = await db.select().from(nodes).where(eq(nodes.id, cand.id)).limit(1);
     if (!node || isDeadNode(node)) continue; // no judge spend on finished nodes
-    const rec = await judgePair(signal, node);
+    const rec = await judgePair(signal, node, opts.weightScale ?? 1);
     if (rec) made.push(rec);
   }
   return made;

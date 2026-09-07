@@ -1,0 +1,1 @@
+ALTER TABLE "loom_playbooks" ADD COLUMN "pattern_embedding" vector(1536);

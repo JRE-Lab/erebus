@@ -42,6 +42,7 @@ import { resolveNarrativeEntities } from "./entities.js";
 import { extractFraming, runIntent } from "./intent.js";
 import { issueForecasts } from "./forecasts.js";
 import { matchPlaybooks } from "./playbooks.js";
+import { bridgeNarrativesToTree } from "./bridge.js";
 
 // Spec starts at 0.82 and says "tune on eval set" — measured on live data,
 // text-embedding-3-small puts same-story cross-outlet pairs at ~0.70-0.80
@@ -74,6 +75,8 @@ export type LoomPassResult = LoomClusterResult &
     judgments?: number;
     forecastsIssued?: number;
     playbookMatches?: number;
+    bridgeSignals?: number;
+    bridgeMatches?: number;
   };
 
 const ZERO: LoomClusterResult = { embedded: 0, assigned: 0, seeded: 0, promoted: 0, labeled: 0, cost: 0 };
@@ -96,6 +99,7 @@ export async function runLoomPass(): Promise<LoomPassResult> {
       const intent = await runIntent();
       const forecasts = await issueForecasts();
       const playbooks = await matchPlaybooks();
+      const bridge = await bridgeNarrativesToTree();
       return {
         ...cluster,
         ...lifecycle,
@@ -106,6 +110,8 @@ export async function runLoomPass(): Promise<LoomPassResult> {
         judgments: intent.judgments,
         forecastsIssued: forecasts.lifecycle + forecasts.market,
         playbookMatches: playbooks.matched,
+        bridgeSignals: bridge.signalsEmitted,
+        bridgeMatches: bridge.matchesMade,
       };
     } finally {
       await client.query(`SELECT pg_advisory_unlock(${LOCK_KEY})`);
@@ -292,7 +298,8 @@ async function clusterInner(): Promise<LoomClusterResult> {
       .set({
         label: res.data.label.trim().slice(0, 140),
         summary: (res.data.summary || "").trim().slice(0, 600) || null,
-        modelVer: SONNET,
+        modelVer: res.model, // served, not configured
+
       })
       .where(eq(loomNarratives.id, n.id));
     r.labeled++;

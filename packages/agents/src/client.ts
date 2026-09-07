@@ -202,24 +202,24 @@ export async function callJSON<T>(
   prompt: string,
   fallback: T,
   opts: CallOpts = {}
-): Promise<{ data: T; cost: number; offline: boolean; parsed: boolean }> {
+): Promise<{ data: T; cost: number; offline: boolean; parsed: boolean; model: string }> {
   const system = (opts.system ? opts.system + "\n\n" : "") + "Respond with ONLY valid JSON — no prose, no markdown fences.";
   let r: LLMResult;
   try {
     r = await call(prompt, { ...opts, system });
   } catch {
-    return { data: fallback, cost: 0, offline: true, parsed: false };
+    return { data: fallback, cost: 0, offline: true, parsed: false, model: "offline" };
   }
   if (r.offline || !r.content) {
     // note: an empty response can still have been billed (r.cost carries it)
-    return { data: fallback, cost: r.cost ?? 0, offline: true, parsed: false };
+    return { data: fallback, cost: r.cost ?? 0, offline: true, parsed: false, model: r.model };
   }
   try {
     const cleaned = r.content.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-    return { data: JSON.parse(cleaned) as T, cost: r.cost, offline: false, parsed: true };
+    return { data: JSON.parse(cleaned) as T, cost: r.cost, offline: false, parsed: true, model: r.model };
   } catch {
     console.warn(`[llm] JSON parse failure (${opts.agent || "agent"}): ${r.content.slice(0, 200)}`);
-    return { data: fallback, cost: r.cost, offline: false, parsed: false };
+    return { data: fallback, cost: r.cost, offline: false, parsed: false, model: r.model };
   }
 }
 
