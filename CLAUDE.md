@@ -15,6 +15,45 @@
 
 ---
 
+## 0.5 Build status (2026-09-07)
+
+This blueprint has been **built**. Everything in §10 is live on the VPS; the
+operational truth is `HANDOFF.md` (read that first for state, access, and
+contracts). Deviations from §13 defaults, as resolved:
+
+| Default (§13) | Resolved as |
+|---|---|
+| Embeddings TBD | OpenAI `text-embedding-3-small`, `VECTOR(1536)` everywhere |
+| Tiering Opus / Sonnet | deep = `claude-fable-5` (beta endpoint, Opus 4.8 refusal fallback), fast = `claude-haiku-4-5`; OpenAI gpt-4o / gpt-4o-mini fallback on any error |
+| News source TBD | RSS (`NEWS_SOURCES`, 13 feeds) for the tree; 28 feeds for LOOM (`LOOM_ARTICLE_FEEDS`) |
+| Worker: cron + Redis | timer ticks in `apps/worker`; Redis present, BullMQ not adopted |
+| Content: ElevenLabs + Remotion | ElevenLabs (optional) + **ffmpeg** (Remotion dropped) |
+| Governors `CYCLE_BUDGET_USD` | plus a **shared daily governor** enforced inside every LLM call, fail-closed |
+
+| §10 phase | Status |
+|---|---|
+| 0–3 Foundation, tree, expansion, corroboration | done — corroboration is a **log-odds Bayesian** update, not a scalar |
+| 4–5 Debate/lenses, synthesize/reconcile | done |
+| 6 Shadow Board | done, counter-forecasts wired into the tree |
+| 7 Autonomous worker + governors | done; hardened (selector rotation, terminal-state enforcement, fail-closed budget) |
+| 8–9 Gardener, worldview | done |
+| 10 Explorer UI | done (+ Made, Market, Shadow, Studio, **∿ Loom** tabs) |
+| 11 Content Studio | done and verified end-to-end; de-prioritized by the operator |
+
+Beyond the blueprint: **game-theory decision layer** (equilibrium stability →
+`tipping` state), **real external calibration** (Brier against markets /
+operator / source-verified judge), **theory factory** (genesis + dark genesis),
+alerts, operating hours, and **LOOM** — a narrative-intelligence layer
+(`LOOM_SPEC.md`, Phases 0–5 built) that clusters the story stream, attributes
+intent as competing hypotheses under R1–R8 discipline, pre-registers scored
+forecasts, and feeds promoted narratives back into the tree as evidence.
+
+Known operator-side gaps at this date: Anthropic key rotated and not yet
+replaced (deep tier on fallback); vendor decisions pending for options-flow
+data and a GCP project (GDELT).
+
+---
+
 ## 1. The engine — prime directive
 
 EREBUS is a persistent analytical intelligence that thinks when you're not looking. **The core loop:**

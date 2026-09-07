@@ -1,5 +1,15 @@
 # EREBUS Deep Code Review — 2026-07-20
 
+> **Resolution status (2026-09-07):** every fix-now and fix-soon finding below was
+> addressed in the hardening pass (`4b192fe`) or superseded by the LOOM work; the
+> resulting contracts are listed in `HANDOFF.md` §5. Two items were consciously left
+> as documented pre-existing issues rather than fixed: the `applyMatch`
+> read-modify-write race and the `judgePair` insert-before-apply crash window
+> (both bounded, both noted in HANDOFF §5). Later phases each got their own
+> adversarial review (Phase 1: 9 findings, Phases 2–4: 37, Phase 5: 29, bridge:
+> 6) — those reports were applied inline and are summarized in the commit
+> messages rather than persisted here.
+
 _8 specialist finders → adversarial verification → synthesis. 116 raised, **70 confirmed**, 1 refuted, 45 low-severity._
 
 ## Verdict
