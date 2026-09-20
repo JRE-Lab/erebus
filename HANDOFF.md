@@ -1,6 +1,6 @@
 # EREBUS — Project Handoff
 
-_Last updated 2026-09-07 · branch `forecast-engine` · head `4c9cf64` · migrations through `0012`_
+_Last updated 2026-09-19 · branch `forecast-engine` · head `ba04a3f` · migrations through `0012`_
 
 EREBUS is a **forward-branching forecast tree that greens as reality confirms it**.
 Each node is a forecast (question + not-yet-happened outcome + indicators +
@@ -21,12 +21,14 @@ attributes intent as competing hypotheses, and feeds the tree back.
 | Hardening pass (80-agent review, 70 findings) | **Done** — `4b192fe` |
 | LOOM Phases 0–5 (spec v0.1) | **Built and live** except vendor-gated items |
 | LOOM → tree bridge | **Live** — promoted narratives green theories |
-| Autonomous toggle | **ON** (re-enabled 2026-08-25 after being off since Jul 2) |
+| Autonomous toggle | **OFF** as of 2026-09-19 (was re-enabled 08-25; switched off since). Gates cycle/genesis/verify. |
 | Anthropic key | ⚠️ **401 — rotated and not replaced.** Deep tier runs on the gpt-4o fallback. Fable 5 is NOT serving. |
 | Daily spend | ≈ $0.40–1.00/day on the fallback; hard cap `DAILY_BUDGET_USD` (15) |
 
-Live corpus at last check: **3,845 articles · 28 feeds / 20 outlets · 47 promoted
-narratives · 165 R2-complete judgments · 69 pre-registered forecasts · 9 playbooks / 11 matches.**
+Live at 2026-09-19: **2,729 tree nodes (480 roots) · 316 resolved, mean Brier
+0.171 vs 0.249 climatology · 283 promoted narratives · 280 LOOM forecasts
+resolved · ~$0.82/day.** Per-origin calibration and the two advisory LOOM heads
+are the subject of the active plan below.
 
 **Needs a human:** (1) a new Anthropic key via the hand-off flow (§6); (2) vendor
 decisions — options-flow (~$75–150/mo) and a GCP project for GDELT; (3) nothing
