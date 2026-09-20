@@ -169,6 +169,12 @@ Spec: `LOOM_SPEC.md` (12 modules M1–M12, rules R1–R8). Built Phases 0–5; u
 
 ## 7. Roadmap
 
+> **Active plan: [`docs/PLAN-2026-09-UI-AND-ENGINE.md`](docs/PLAN-2026-09-UI-AND-ENGINE.md)** — measured
+> findings (the theory factory is worse than climatology; both LOOM heads are
+> advisory on wrong priors; 87% of roots are childless stumps) plus an ordered
+> set of work packages and the UI rebuild. Start there.
+
+
 1. **Replace the Anthropic key** — until then the deep tier is gpt-4o and Fable never serves.
 2. **Let the clocks run** — Phase 1 acceptance (7 days) and the R6/R8 calibration cycle only accrue with time and resolved forecasts.
 3. **Corpus breadth keeps paying** — most Phase 5 statistics are gated on outlets and precedent depth; add feeds before adding code.
