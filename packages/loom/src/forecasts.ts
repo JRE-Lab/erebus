@@ -7,9 +7,11 @@
 //                  amplifying; resolved from the transition log.
 //   market_move  — direction/magnitude on the top exposed instrument over 7
 //                  calendar days; resolved on adjusted closes.
-// Phase 5: priors come from regime-matched ANALOGS when enough precedents
-// exist; otherwise the hand-set prior stands and the row records that it was
-// uninformative, so the card can say so rather than implying evidence.
+// Priors are chosen in tiers (see priors.ts): a genuinely informative
+// regime-matched ANALOG prior, else the head's own EMPIRICAL base rate once it
+// has >= LOOM_EMPIRICAL_MIN_N resolutions, else the HAND-SET constant. Every
+// row records which tier it used, so the card never implies evidence it does
+// not have. R6 exists to catch this loop failing; it caught exactly this.
 // preposition claims + contract_odds (Kalshi) are v2 (documented).
 // R6: the scoreboard compares each head's rolling Brier to the climatological
 // base rate; a losing head is marked advisory.
@@ -19,10 +21,12 @@ import { db, loomForecasts, loomResolutions } from "@erebus/db";
 import { narrativeInstruments } from "./entities.js";
 import { priceSeries } from "./pricing.js";
 import { lifecyclePrior, marketPrior, buildAnalogs } from "./analogs.js";
+import { empiricalHeadPrior, choosePrior } from "./priors.js";
 
 const LIFECYCLE_PRIOR = Number(process.env.LOOM_LIFECYCLE_PRIOR || 0.45);
 const MARKET_PRIOR = Number(process.env.LOOM_MARKET_PRIOR || 0.55);
-const MODEL_VER = "loom-phase4-mvp-1";
+const MODEL_VER = "loom-phase4-mvp-2"; // bumped: priors now tiered (priors.ts)
+const SCOREBOARD_DAYS = Number(process.env.LOOM_SCOREBOARD_DAYS || 90);
 // The market claim's magnitude, declared once so issuance, the analog prior,
 // and resolution all price the SAME event.
 const MAGNITUDE_BAND = process.env.LOOM_MAGNITUDE_BAND || "1-3%";
@@ -48,6 +52,13 @@ export interface LoomForecastResult { lifecycle: number; market: number }
 export async function issueForecasts(): Promise<LoomForecastResult> {
   const r: LoomForecastResult = { lifecycle: 0, market: 0 };
   const regime = await currentRegime();
+  // One read per pass, not per forecast: the head's empirical prior is the
+  // same for every claim issued in this pass.
+  const marketFallback = regime === "risk_off" ? Math.max(0.5, MARKET_PRIOR - 0.05) : MARKET_PRIOR;
+  const [empiricalLifecycle, empiricalMarket] = await Promise.all([
+    empiricalHeadPrior("lifecycle", LIFECYCLE_PRIOR),
+    empiricalHeadPrior("market_move", marketFallback),
+  ]);
   // Analogs are refreshed in the 6h market pass, but forecasts are issued on
   // the HOURLY transition — so a narrative amplifying for the first time would
   // always find an empty analog set and permanently fall back, no matter how
@@ -77,7 +88,8 @@ export async function issueForecasts(): Promise<LoomForecastResult> {
     // a delayed pass would otherwise shift the window and could resolve a claim
     // false for a peak that happened inside the real window.
     const at = new Date(row.at as string);
-    const prior = await lifecyclePrior(row.narrative_id as string, 72, LIFECYCLE_PRIOR);
+    const analog = await lifecyclePrior(row.narrative_id as string, 72, LIFECYCLE_PRIOR);
+    const prior = choosePrior(analog.informative ? analog : null, empiricalLifecycle);
     await db.insert(loomForecasts).values({
       narrativeId: row.narrative_id as string,
       claimType: "lifecycle",
@@ -86,7 +98,10 @@ export async function issueForecasts(): Promise<LoomForecastResult> {
         withinHours: 72,
         transitionId: row.transition_id as string,
         priorBasis: prior.basis,
-        priorInformative: prior.informative,
+        priorTier: prior.tier,
+        // kept so pre-existing rows and the card keep the same meaning:
+        // "is this probability grounded in data at all?"
+        priorInformative: prior.tier !== "hand-set",
         analogN: prior.n,
       },
       windowStart: at,
@@ -134,14 +149,15 @@ export async function issueForecasts(): Promise<LoomForecastResult> {
         // and report its own frequency is post-selection bias.
         const direction: "up" | "down" = sig >= 0 ? "up" : "down";
         const minMag = MIN_MAGNITUDE;
-        const mp = await marketPrior(
+        const analogMp = await marketPrior(
           row.narrative_id,
           inst.symbol,
           direction,
           minMag,
           7,
-          regime === "risk_off" ? Math.max(0.5, MARKET_PRIOR - 0.05) : MARKET_PRIOR
+          marketFallback
         );
+        const mp = choosePrior(analogMp.informative ? analogMp : null, empiricalMarket);
         await db.insert(loomForecasts).values({
           narrativeId: row.narrative_id,
           claimType: "market_move",
@@ -149,7 +165,8 @@ export async function issueForecasts(): Promise<LoomForecastResult> {
             instrument: inst.symbol,
             instrumentId: inst.instrumentId,
             priorBasis: mp.basis,
-            priorInformative: mp.informative,
+            priorTier: mp.tier,
+            priorInformative: mp.tier !== "hand-set",
             analogN: mp.n,
             observedSignal: sig,
           },
@@ -248,9 +265,22 @@ export async function resolveLoomForecasts(): Promise<LoomResolveResult> {
 }
 
 // --- scoreboard (R6) ----------------------------------------------------------
+// R6 status, with the distinction the two-state version could not make.
+// Issuing a head's own base rate drives its Brier TO climatology and no
+// further, so "not worse than climatology" is not evidence of skill — it is
+// evidence of having stopped being wrong. Only `skillful` means the head
+// carries case-specific information, and only `skillful` should ever satisfy
+// R8 ("no capital until a head beats its base rate").
+export type HeadStatus = "skillful" | "calibrated" | "advisory" | "calibrating";
+
 export interface LoomHeadScore {
   claimType: string; n: number; meanBrier: number; baseRate: number;
-  climatologyBrier: number; status: "live" | "advisory";
+  climatologyBrier: number;
+  /** Brier skill score, 1 - brier/climatology. > 0 is skill. */
+  skillScore: number;
+  /** standard error of the mean Brier — the band inside which we claim nothing */
+  stderr: number;
+  status: HeadStatus;
 }
 
 export async function loomScoreboard(): Promise<LoomHeadScore[]> {
@@ -258,24 +288,39 @@ export async function loomScoreboard(): Promise<LoomHeadScore[]> {
     SELECT f.claim_type,
            count(*)::int AS n,
            avg(res.brier) AS mean_brier,
+           stddev_samp(res.brier) AS sd_brier,
            avg(CASE WHEN res.outcome THEN 1.0 ELSE 0.0 END) AS base_rate
       FROM loom_resolutions res JOIN loom_forecasts f ON f.id = res.forecast_id
-     WHERE res.resolved_at > now() - interval '90 days'
+     WHERE res.resolved_at > now() - make_interval(days => ${SCOREBOARD_DAYS})
      GROUP BY f.claim_type
   `);
   return (res as unknown as { rows: Array<Record<string, unknown>> }).rows.map((row) => {
     const n = Number(row.n);
     const meanBrier = Number(row.mean_brier);
     const baseRate = Number(row.base_rate);
+    const sd = Number(row.sd_brier);
     // Brier of always forecasting the climatological base rate p: p(1-p).
     const climatologyBrier = baseRate * (1 - baseRate);
+    const skillScore = climatologyBrier > 0 ? 1 - meanBrier / climatologyBrier : 0;
+    // Only claim a difference from climatology when it clears sampling noise.
+    const stderr = n > 1 && Number.isFinite(sd) ? sd / Math.sqrt(n) : Infinity;
+    const status: HeadStatus =
+      n < 10
+        ? "calibrating"
+        : meanBrier > climatologyBrier + stderr
+          ? "advisory"
+          : meanBrier < climatologyBrier - stderr
+            ? "skillful"
+            : "calibrated";
     return {
       claimType: row.claim_type as string,
       n,
       meanBrier,
       baseRate,
       climatologyBrier,
-      status: n >= 10 && meanBrier > climatologyBrier ? ("advisory" as const) : ("live" as const),
+      skillScore,
+      stderr: Number.isFinite(stderr) ? stderr : 0,
+      status,
     };
   });
 }

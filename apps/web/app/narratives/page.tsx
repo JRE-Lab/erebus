@@ -30,8 +30,21 @@ interface HeadScore {
   meanBrier: number;
   baseRate: number;
   climatologyBrier: number;
-  status: "live" | "advisory";
+  skillScore: number;
+  stderr: number;
+  // "calibrated" means the head stopped being wrong, NOT that it learned
+  // anything: issuing a base rate lands exactly on climatology. Only
+  // "skillful" is evidence of case-specific information (and only it can
+  // satisfy R8).
+  status: "skillful" | "calibrated" | "advisory" | "calibrating";
 }
+
+const HEAD_STATUS: Record<HeadScore["status"], { label: string; color: string; hint: string }> = {
+  skillful: { label: "skillful", color: "#22c55e", hint: "beats its own base rate beyond sampling noise" },
+  calibrated: { label: "calibrated", color: "#a0a0b8", hint: "matches its base rate — not wrong, but carries no case-specific information" },
+  advisory: { label: "advisory", color: "#a16207", hint: "worse than its base rate (R6): forecasts shown without hit/miss" },
+  calibrating: { label: "calibrating", color: "#6b6b85", hint: "too few resolutions to judge" },
+};
 
 interface LoomStatusShape {
   articlesTotal: number;
@@ -428,13 +441,21 @@ export default function NarrativesPage() {
                 );
               })}
               {scores.length > 0 && (
-                <div className="mt-1 text-[10px]" style={{ color: "var(--nx-text-muted)" }}>
-                  {scores.map((h) => (
-                    <div key={h.claimType}>
-                      {h.claimType}: brier {h.meanBrier.toFixed(3)} vs climatology {h.climatologyBrier.toFixed(3)} (n={h.n})
-                      {h.status === "advisory" ? " — ADVISORY" : ""}
-                    </div>
-                  ))}
+                <div className="mt-1.5 text-[10px]" style={{ color: "var(--nx-text-muted)" }}>
+                  {scores.map((h) => {
+                    const meta = HEAD_STATUS[h.status];
+                    return (
+                      <div key={h.claimType} title={meta.hint}>
+                        {h.claimType}: brier {h.meanBrier.toFixed(3)} vs base-rate {h.climatologyBrier.toFixed(3)} (n={h.n})
+                        {" · skill "}
+                        <span style={{ color: h.skillScore > 0 ? "#22c55e" : "var(--nx-text-muted)" }}>
+                          {h.skillScore >= 0 ? "+" : ""}{(100 * h.skillScore).toFixed(0)}%
+                        </span>
+                        {" · "}
+                        <b style={{ color: meta.color }}>{meta.label}</b>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </Section>
